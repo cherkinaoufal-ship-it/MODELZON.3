@@ -2,7 +2,7 @@ import type { Lang } from "@/lib/i18n";
 import { useRef, useState } from "react";
 import {
   Brush, Eraser, Droplet, Type as TypeIcon, Waves, Blend,
-  Undo2, FlipHorizontal2, Snowflake, Sun, ChevronDown,
+  Undo2, Snowflake, Sun, ChevronDown,
   AlignLeft, AlignCenter, AlignRight,
 } from "lucide-react";
 import ColorPickerHSV from "@/components/modelzon/ColorPickerHSV";
@@ -220,24 +220,33 @@ export default function ProToolbar({
             <button
               key={s.id}
               onClick={() => setBrush({ lineStyle: s.id })}
-              className={`px-2.5 py-1.5 rounded-lg text-[10px] font-bold border ${
+              title={t(s.en, s.ar)}
+              className={`rounded-lg border overflow-hidden flex flex-col items-center transition ${
                 brush.lineStyle === s.id
-                  ? "bg-cyan-500/25 border-cyan-400 text-cyan-100"
-                  : "bg-black/40 border-white/10 text-white/60"
+                  ? "bg-cyan-500/25 border-cyan-400"
+                  : "bg-black/40 border-white/10 hover:border-white/30"
               }`}
             >
-              {t(s.en, s.ar)}
+              {/* §7 — real mini diagram of the line style on fabric */}
+              <img src={`/assets/studio/line-${s.id}.svg`} alt="" draggable={false} className="w-[4.2rem] h-7 object-cover" />
+              <span className={`text-[8.5px] font-bold pb-0.5 ${brush.lineStyle === s.id ? "text-cyan-100" : "text-white/55"}`}>
+                {t(s.en, s.ar)}
+              </span>
             </button>
           ))}
           <button
             onClick={() => setBrush({ symmetry: !brush.symmetry })}
-            className={`px-2.5 py-1.5 rounded-lg text-[10px] font-bold border flex items-center gap-1 ${
+            className={`rounded-lg border overflow-hidden flex flex-col items-center transition ${
               brush.symmetry
-                ? "bg-fuchsia-500/25 border-fuchsia-400 text-fuchsia-100"
-                : "bg-black/40 border-white/10 text-white/60"
+                ? "bg-fuchsia-500/25 border-fuchsia-400"
+                : "bg-black/40 border-white/10 hover:border-white/30"
             }`}
           >
-            <FlipHorizontal2 size={12} /> {t("Symmetry", "تماثل")}
+            {/* §7 — mirror-axis mini diagram */}
+            <img src="/assets/studio/symmetry.svg" alt="" draggable={false} className="w-[4.2rem] h-7 object-cover" />
+            <span className={`text-[8.5px] font-bold pb-0.5 ${brush.symmetry ? "text-fuchsia-100" : "text-white/55"}`}>
+              {t("Symmetry", "تماثل")}
+            </span>
           </button>
         </div>
       </div>

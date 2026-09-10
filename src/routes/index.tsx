@@ -31,7 +31,6 @@ import ChatPanel from "@/components/modelzon/ChatPanel";
 import ShortsFeed from "@/components/modelzon/ShortsFeed";
 import ProToolbar from "@/components/modelzon/ProToolbar";
 import ColorPickerHSV from "@/components/modelzon/ColorPickerHSV";
-import DecorationIcon from "@/components/modelzon/DecorationIcon";
 import GarmentPartsSheet from "@/components/modelzon/GarmentPartsSheet";
 import ScrollTopFab from "@/components/modelzon/ScrollTopFab";
 import MockupBoard2D from "@/components/modelzon/MockupBoard2D";
@@ -1461,7 +1460,13 @@ function Modelzon() {
                                   active ? "bg-cyan-400/20 border-cyan-400/60 text-cyan-200" : "bg-white/[0.04] border-white/10 text-white/60 hover:border-white/30"
                                 }`}
                               >
-                                <DecorationIcon id={d.id} />
+                                {/* §7 — real result on fabric for every type */}
+                                <img
+                                  src={`/assets/studio/deco-${d.id}.svg`}
+                                  alt=""
+                                  draggable={false}
+                                  className="w-7 h-5 rounded-[5px] object-cover border border-white/15"
+                                />
                                 {lang === "ar" ? d.ar : d.en}
                               </button>
                             );

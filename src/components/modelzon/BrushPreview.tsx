@@ -1,10 +1,38 @@
 import type { BrushId } from "@/lib/paint-engine";
 
 /**
- * Tiny SVG "stroke sample" for every brush in the library.
- * Each preview draws the same S-curve path so the difference between a
- * marker, a pencil and a neon glow reads instantly at a glance.
+ * §7 — illustrative near-rendered preview for every brush in the library.
+ * Core brushes, stitching and hardware/texture brushes render the generated
+ * SVG assets (public/assets/studio/brush-*.svg / stitch-*.svg /
+ * hardware-*.svg): a real tool illustration + the stroke it makes, and the
+ * stitch/hardware ones sit on a woven-fabric swatch. Falls back to the
+ * original inline stroke sample for any id without an asset.
  */
+const ASSET_PREFIX: Partial<Record<BrushId, string>> = {
+  pen: "brush", marker: "brush", pencil: "brush", calligraphy: "brush",
+  airbrush: "brush", spray: "brush", glow: "brush",
+  "stitch-straight": "stitch", "stitch-broken": "stitch", "stitch-rect": "stitch",
+  "stitch-blanket": "stitch", "stitch-feather": "stitch", "stitch-frayed": "stitch",
+  "stitch-overlock": "stitch", "stitch-satin": "stitch",
+  zipper: "hardware", "zipper-sketch": "hardware", chain: "hardware",
+  rip: "hardware", camo: "hardware", denim: "hardware", sequin: "hardware",
+};
+
+export default function BrushPreview({ id, color = "currentColor" }: { id: BrushId; color?: string }) {
+  const prefix = ASSET_PREFIX[id];
+  if (prefix) {
+    return (
+      <img
+        src={`/assets/studio/${prefix}-${id}.svg`}
+        alt=""
+        draggable={false}
+        className="w-full h-10 object-contain rounded-md"
+      />
+    );
+  }
+  return <BrushPreviewSample id={id} color={color} />;
+}
+
 const PATH = "M4 20 C 14 4, 30 30, 44 12";
 
 function Wrap({ children }: { children: React.ReactNode }) {
@@ -15,7 +43,7 @@ function Wrap({ children }: { children: React.ReactNode }) {
   );
 }
 
-export default function BrushPreview({ id, color = "currentColor" }: { id: BrushId; color?: string }) {
+function BrushPreviewSample({ id, color = "currentColor" }: { id: BrushId; color?: string }) {
   switch (id) {
     case "pen":
       return (
