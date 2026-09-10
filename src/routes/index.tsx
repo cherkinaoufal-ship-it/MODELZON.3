@@ -61,6 +61,57 @@ import { useUsernameAvailability, USERNAME_TAKEN_AR } from "@/lib/username";
 import { supabase } from "@/lib/supabase";
 import AuthGate from "@/components/modelzon/AuthGate";
 import { Loader2, Save, Trash2 } from "lucide-react";
+import type { ReactNode } from "react";
+
+// §2 — Studio panel sheet: slides bottom→up OVER the full-height viewport.
+// Closes by tapping outside or dragging the handle down; the 3D model stays
+// visible behind (glass sheet, max 82% height, internal scroll).
+type StudioPanelId = "garments" | "fit" | "ai" | "paint" | "print" | "bg" | "layout";
+
+function StudioSheet({
+  open, title, icon, onClose, children,
+}: {
+  open: boolean;
+  title: string;
+  icon?: ReactNode;
+  onClose: () => void;
+  children: ReactNode;
+}) {
+  const [dragY, setDragY] = useState(0);
+  const startY = useRef<number | null>(null);
+  useEffect(() => { setDragY(0); }, [open]);
+  if (!open) return null;
+  const transition = startY.current === null ? "transform 200ms cubic-bezier(.2,.8,.2,1)" : "none";
+  return (
+    <>
+      <style>{`@keyframes mzSheetUp{from{transform:translateY(100%)}to{transform:translateY(0)}}`}</style>
+      <div className="absolute inset-0 z-30 bg-black/30" onClick={onClose} />
+      <div
+        className="absolute inset-x-0 bottom-0 z-40 flex flex-col rounded-t-3xl border-t border-white/15 bg-[#0a0a16]/95 backdrop-blur-xl shadow-[0_-16px_48px_rgba(0,0,0,.65)] max-h-[82%]"
+        style={{ animation: "mzSheetUp 220ms cubic-bezier(.2,.8,.2,1)", transform: `translateY(${dragY}px)`, transition }}
+      >
+        <div
+          className="shrink-0 pt-2.5 pb-1.5 flex justify-center cursor-grab active:cursor-grabbing touch-none"
+          onPointerDown={(e) => { startY.current = e.clientY; e.currentTarget.setPointerCapture(e.pointerId); setDragY(0); }}
+          onPointerMove={(e) => { if (startY.current !== null) setDragY(Math.max(0, e.clientY - startY.current)); }}
+          onPointerUp={() => { const close = dragY > 64; startY.current = null; if (close) onClose(); else setDragY(0); }}
+          onPointerCancel={() => { startY.current = null; setDragY(0); }}
+        >
+          <div className="w-12 h-1.5 rounded-full bg-white/30" />
+        </div>
+        <div className="shrink-0 flex items-center gap-2 px-4 pb-1.5">
+          {icon}
+          <span className="text-sm font-black text-white/90">{title}</span>
+          <button onClick={onClose} className="ml-auto w-7 h-7 rounded-full bg-white/5 border border-white/15 flex items-center justify-center text-white/70 hover:text-white">
+            <X size={14} />
+          </button>
+        </div>
+        <div className="min-h-0 overflow-y-auto px-3 pb-4 overscroll-contain">{children}</div>
+      </div>
+    </>
+  );
+}
+
 import { saveDesign, listMyDesigns, deleteDesign, type SavedDesign } from "@/lib/designs";
 import { fetchTopPlayers, type LeaderboardEntry } from "@/lib/leaderboard";
 import { fetchMarketplace, listDesignForSale, unlistDesign, createPendingOrder, type MarketplaceListing } from "@/lib/marketplace";
@@ -245,7 +296,7 @@ function Modelzon() {
   const [overlayFront, setOverlayFront] = useState<string | null>(null);
   const [overlayBack, setOverlayBack] = useState<string | null>(null);
   const [decalSide, setDecalSide] = useState<PanelId>("front");
-  const [studioPanel, setStudioPanel] = useState<"garments" | "fit" | "ai" | "paint" | "print" | "bg" | "layout">("garments");
+  const [studioPanel, setStudioPanel] = useState<StudioPanelId | null>("garments");
   const [partsSheetOpen, setPartsSheetOpen] = useState(false);
   // §2 — bottom-bar "+" upload flow state (shared VideoUpload components).
   const [navUploadOpen, setNavUploadOpen] = useState(false);
@@ -1073,8 +1124,11 @@ function Modelzon() {
 
           <section ref={mainScrollRef} className="lg:overflow-y-auto lg:rounded-2xl lg:border lg:border-white/10 lg:bg-black/30 p-4 lg:p-0">
             {tab === "studio" && (
-              <div className="space-y-3">
-                <div className="lg:h-[70vh] relative rounded-2xl overflow-hidden border border-white/10 bg-black/40" style={{ height: "min(65vh, 560px)" }}>
+              <div className="relative flex flex-col h-[calc(100dvh-10.5rem)] lg:h-[calc(100vh-6.5rem)]">
+                {/* §2 — the model view now fills the whole area between the
+                    top bar and the bottom nav; every tool lives on floating
+                    glass overlays + sliding sheets above it. */}
+                <div className="flex-1 min-h-0 relative rounded-2xl overflow-hidden border border-white/10 bg-black/40">
                   <Suspense fallback={<div className="flex items-center justify-center h-full text-white/40">Loading studio…</div>}>
                     <Studio3D
                       ref={studioRef}
@@ -1090,113 +1144,120 @@ function Modelzon() {
                       frozen={frozen} undoSignal={undoSignal} clearSignal={clearSignal}
                     />
                   </Suspense>
-                  <button
-                    onClick={() => setFrozen((f) => !f)}
-                    className={`absolute top-3 left-3 flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[10px] font-black border backdrop-blur transition ${
-                      frozen ? "bg-cyan-500/25 border-cyan-400 text-cyan-100" : "bg-black/60 border-white/15 text-white/70"
-                    }`}
-                  >
-                    {frozen ? <Snowflake size={12} /> : <Sun size={12} />}
-                    {frozen ? t("Frozen", "مثبّت") : t("Freeze", "تثبيت")}
-                  </button>
+                  {/* §2 — floating mini column: freeze / undo / redo over
+                      the viewport (reference-style right-rail mini tools). */}
+                  <div className="absolute z-20 top-3 left-3 flex flex-col gap-2">
+                    <button
+                      onClick={() => setFrozen((f) => !f)}
+                      title={frozen ? t("Frozen", "مثبّت") : t("Freeze", "تثبيت")}
+                      className={`w-10 h-10 rounded-full flex items-center justify-center border backdrop-blur transition ${
+                        frozen ? "bg-cyan-500/30 border-cyan-400 text-cyan-100" : "bg-black/60 border-white/15 text-white/70 hover:border-white/40"
+                      }`}
+                    >
+                      {frozen ? <Snowflake size={15} /> : <Sun size={15} />}
+                    </button>
+                    {/* §14b — garment-level element history */}
+                    <button
+                      onClick={undoElements}
+                      disabled={elementsHistoryRef.current.past.length === 0}
+                      title={t("Undo (elements)", "تراجع (عناصر)")}
+                      className="w-10 h-10 rounded-full flex items-center justify-center border backdrop-blur bg-black/60 border-white/15 text-white/70 hover:border-cyan-400/60 disabled:opacity-30 transition"
+                    >
+                      <Undo2 size={15} />
+                    </button>
+                    <button
+                      onClick={redoElements}
+                      disabled={elementsHistoryRef.current.future.length === 0}
+                      title={t("Redo (elements)", "إعادة (عناصر)")}
+                      className="w-10 h-10 rounded-full flex items-center justify-center border backdrop-blur bg-black/60 border-white/15 text-white/70 hover:border-cyan-400/60 disabled:opacity-30 transition"
+                    >
+                      <Redo2 size={15} />
+                    </button>
+                  </div>
                   <div className="absolute top-3 right-3 px-3 py-1.5 rounded-full bg-black/60 border border-white/10 text-[10px] font-mono text-white/60 backdrop-blur">
                     {quality.toUpperCase()} · {garment.toUpperCase()} · {size}
                   </div>
-                </div>
 
-                <div className="flex gap-2">
-                  {/* §14b — garment-level element history */}
-                  <button
-                    onClick={undoElements}
-                    disabled={elementsHistoryRef.current.past.length === 0}
-                    title={t("Undo (elements)", "تراجع (عناصر)")}
-                    className="w-12 flex items-center justify-center rounded-xl py-3 border border-white/15 bg-white/[0.04] text-white/70 hover:border-cyan-400/50 disabled:opacity-30 transition"
-                  >
-                    <Undo2 size={16} />
-                  </button>
-                  <button
-                    onClick={redoElements}
-                    disabled={elementsHistoryRef.current.future.length === 0}
-                    title={t("Redo (elements)", "إعادة (عناصر)")}
-                    className="w-12 flex items-center justify-center rounded-xl py-3 border border-white/15 bg-white/[0.04] text-white/70 hover:border-cyan-400/50 disabled:opacity-30 transition"
-                  >
-                    <Redo2 size={16} />
-                  </button>
-                  <button
-                    onClick={handleSaveDesign}
-                    disabled={savingDesign}
-                    className="flex-1 flex items-center justify-center gap-2 rounded-xl py-3 bg-gradient-to-r from-emerald-400 to-cyan-400 text-black text-sm font-black disabled:opacity-60"
-                  >
-                    {savingDesign ? <Loader2 size={16} className="animate-spin" /> : <Save size={16} />}
-                    {t("Save", "حفظ")}
-                  </button>
-                  <button
-                    onClick={() => {
-                      // §3 — refuse to open the production flow (and make no
-                      // API call) while the garment has no design at all.
-                      if (elements.length === 0 && !studioRef.current?.getPaintDataUrl()) {
-                        toast.error(lang === "ar" ? "تعذّر التصنيع لأنه لم يتم صنع أي تصميم بعد" : "Can't produce — no design has been created yet");
-                        return;
-                      }
-                      setProductionDesignId("studio-current");
-                    }}
-                    className="flex-1 flex items-center justify-center gap-2 rounded-xl py-3 border border-cyan-400/30 bg-cyan-500/10 text-cyan-200 text-sm font-bold"
-                  >
-                    <Factory size={15} /> {t("Produce", "تصنيع")}
-                  </button>
-                </div>
+                  {/* Save / Produce floating pills */}
+                  <div className="absolute z-20 inset-x-0 bottom-[4.6rem] flex justify-center gap-2 pointer-events-none [&>*]:pointer-events-auto">
+                    <button
+                      onClick={handleSaveDesign}
+                      disabled={savingDesign}
+                      title={t("Save", "حفظ")}
+                      className="flex items-center gap-1.5 px-4 py-2 rounded-full bg-gradient-to-r from-emerald-400 to-cyan-400 text-black text-xs font-black shadow-lg disabled:opacity-60"
+                    >
+                      {savingDesign ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />}
+                      {t("Save", "حفظ")}
+                    </button>
+                    <button
+                      onClick={() => {
+                        // §3 — refuse to open the production flow (and make no
+                        // API call) while the garment has no design at all.
+                        if (elements.length === 0 && !studioRef.current?.getPaintDataUrl()) {
+                          toast.error(lang === "ar" ? "تعذّر التصنيع لأنه لم يتم صنع أي تصميم بعد" : "Can't produce — no design has been created yet");
+                          return;
+                        }
+                        setProductionDesignId("studio-current");
+                      }}
+                      title={t("Produce", "تصنيع")}
+                      className="flex items-center gap-1.5 px-4 py-2 rounded-full bg-black/60 border border-cyan-400/50 text-cyan-200 text-xs font-black backdrop-blur hover:bg-cyan-500/20 transition"
+                    >
+                      <Factory size={14} /> {t("Produce", "تصنيع")}
+                    </button>
+                  </div>
 
-                {/* FitMockup-style action dock: one horizontal row of
-                    labelled icons right under the Save/Produce buttons.
-                    "Garments" comes first — entering the Studio opens it
-                    automatically so you always start by picking the piece
-                    you want to design on. */}
-                <div className="flex gap-2 overflow-x-auto pb-1 -mx-1 px-1">
-                  {([
-                    ["garments", t("Garments", "ملابس"), Shirt],
-                    ["fit", t("Color", "اللون"), PaletteIcon],
-                    ["paint", t("Paint", "رسم"), Brush],
-                    ["print", t("Print", "طباعة"), Printer],
-                    ["bg", t("Background", "الخلفية"), ImageIcon],
-                    ["layout", t("Mockups", "الموك اب"), LayoutGrid],
-                    ["ai", t("AI", "ذكاء"), Sparkles],
-                  ] as const).map(([id, label, Icon]) => {
-                    const active = studioPanel === id;
-                    return (
-                      <button
-                        key={id}
-                        onClick={() => setStudioPanel(id)}
-                        title={label}
-                        className={`shrink-0 min-w-[70px] rounded-2xl px-3 py-2.5 flex flex-col items-center gap-1 border transition ${
-                          active
-                            ? "bg-cyan-500/20 border-cyan-400/60 text-cyan-100 shadow-[0_0_18px_rgba(6,182,212,0.25)]"
-                            : "bg-white/[0.04] border-white/10 text-white/60 hover:bg-white/[0.07]"
-                        }`}
-                      >
-                        <Icon size={18} />
-                        <span className="text-[9px] font-bold">{label}</span>
-                      </button>
-                    );
-                  })}
-                </div>
+                  {/* §2 — floating tool icons row over the viewport.
+                      "Garments" comes first — entering the Studio opens it
+                      automatically so you always start by picking the piece. */}
+                  <div className="absolute z-20 inset-x-0 bottom-2.5 flex justify-center gap-1.5 px-2">
+                    {([
+                      ["garments", t("Garments", "ملابس"), Shirt],
+                      ["fit", t("Color", "اللون"), PaletteIcon],
+                      ["paint", t("Paint", "رسم"), Brush],
+                      ["print", t("Print", "طباعة"), Printer],
+                      ["bg", t("Background", "الخلفية"), ImageIcon],
+                      ["layout", t("Mockups", "الموك اب"), LayoutGrid],
+                      ["ai", t("AI", "ذكاء"), Sparkles],
+                    ] as const).map(([id, label, Icon]) => {
+                      const active = studioPanel === id;
+                      return (
+                        <button
+                          key={id}
+                          onClick={() => setStudioPanel(id)}
+                          title={label}
+                          className={`w-[3.1rem] py-1.5 rounded-2xl flex flex-col items-center gap-0.5 border backdrop-blur transition ${
+                            active
+                              ? "bg-cyan-500/30 border-cyan-400/70 text-cyan-100 shadow-[0_0_16px_rgba(6,182,212,0.35)]"
+                              : "bg-black/55 border-white/15 text-white/65 hover:bg-black/70 hover:border-white/35"
+                          }`}
+                        >
+                          <Icon size={17} />
+                          <span className="text-[8.5px] font-bold leading-none">{label}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
 
                 {/* Garment picker INSIDE the studio — the entry point of the
                     design flow: entering the Studio tab lands here first,
                     choosing a piece opens the design panels automatically. */}
-                {studioPanel === "garments" && (
+                <StudioSheet
+                  open={studioPanel === "garments"}
+                  icon={<Shirt size={15} className="text-cyan-300" />}
+                  title={t("Choose a garment", "اختر قطعة الملابس")}
+                  onClose={() => setStudioPanel(null)}
+                >
                   <div className="rounded-2xl p-3 bg-white/[0.03] border border-white/10 space-y-3">
-                    <div className="flex items-center gap-2">
-                      <Shirt size={15} className="text-cyan-300" />
-                      <span className="text-sm font-black">{t("Choose a garment", "اختر قطعة الملابس")}</span>
-                      <span className="ml-auto text-[10px] text-white/40">
-                        {t("Pick what suits you — the studio opens right after", "اختر الي يناسبك — يفتح لك الاستوديو بعدها مباشرة")}
-                      </span>
-                    </div>
                     <GarmentLibrary lang={lang} onPick={applyGarment} />
                   </div>
-                )}
+                </StudioSheet>
 
-                {studioPanel === "paint" && (
+                <StudioSheet
+                  open={studioPanel === "paint"}
+                  icon={<Brush size={15} className="text-cyan-300" />}
+                  title={t("Draw & paint tools", "أدوات الرسم والطلاء")}
+                  onClose={() => setStudioPanel(null)}
+                >
                   <ProToolbar
                     brush={brush}
                     setBrush={(patch) => setBrush((b) => ({ ...b, ...patch }))}
@@ -1205,73 +1266,19 @@ function Modelzon() {
                     onUndo={() => setUndoSignal((n) => n + 1)}
                     lang={lang}
                   />
-                )}
+                </StudioSheet>
 
                 {/* Print tab — production actions (upload artwork, undo
                     stroke, clear painted layers) PLUS, per §12, the full
                     print/embroidery treatment card that used to be the
                     separate "Edit" tab (rendered right below). */}
-                {studioPanel === "print" && (
-                  <div className="rounded-2xl p-3 bg-white/[0.03] border border-white/10 space-y-2">
-                    <div className="flex items-center gap-2">
-                      <Printer size={15} className="text-cyan-300" />
-                      <span className="text-sm font-black">{t("Print shop", "قسم الطباعة")}</span>
-                    </div>
-                    <div className="grid grid-cols-2 gap-2">
-                      <button
-                        onClick={() => artworkFileRef.current?.click()}
-                        className="flex flex-col items-center gap-1 py-3 rounded-xl bg-cyan-400/10 border border-cyan-400/30 text-cyan-100 text-[10px] font-bold hover:bg-cyan-400/20 transition"
-                      >
-                        <Upload size={16} />
-                        {t("Upload artwork", "رفع صورة")}
-                      </button>
-                      <button
-                        onClick={() => setElements((els) => els.slice(0, -1))}
-                        disabled={elements.length === 0}
-                        className="flex flex-col items-center gap-1 py-3 rounded-xl bg-white/[0.04] border border-white/10 text-white/70 text-[10px] font-bold hover:bg-white/[0.08] disabled:opacity-30 transition"
-                      >
-                        <Trash2 size={16} />
-                        {t("Delete last element", "حذف آخر عنصر")}
-                      </button>
-                      <button
-                        onClick={() => setUndoSignal((n) => n + 1)}
-                        className="flex flex-col items-center gap-1 py-3 rounded-xl bg-white/[0.04] border border-white/10 text-white/70 text-[10px] font-bold hover:bg-white/[0.08] transition"
-                      >
-                        <RotateCw size={16} />
-                        {t("Undo paint stroke", "تراجع عن رسمة")}
-                      </button>
-                      <button
-                        onClick={() => setClearSignal((n) => n + 1)}
-                        className="flex flex-col items-center gap-1 py-3 rounded-xl bg-red-500/10 border border-red-400/30 text-red-200 text-[10px] font-bold hover:bg-red-500/20 transition"
-                      >
-                        <X size={16} />
-                        {t("Clear painted layer", "مسح الرسم اليدوي")}
-                      </button>
-                    </div>
-                    <p className="text-[10px] text-white/40 leading-relaxed">
-                      {t(
-                        "Undo/clear apply to the freehand painted layer. Elements (images & text) are managed below or by tapping them on the mockup.",
-                        "التراجع/المسح يخصّان طبقة الرسم اليدوي فقط. العناصر (صور ونصوص) تُدار من الأسفل أو بالضغط عليها في الموك اب.",
-                      )}
-                    </p>
-                    {elements.length > 0 && (
-                      <div className="flex flex-wrap gap-1">
-                        {elements.map((el) => (
-                          <button
-                            key={el.id}
-                            onClick={() => setElements((els) => els.filter((x) => x.id !== el.id))}
-                            className="flex items-center gap-1 px-2 py-1 rounded-lg bg-white/[0.04] border border-white/10 text-white/60 text-[9px] font-bold hover:border-red-400/50 hover:text-red-200"
-                          >
-                            {el.kind === "text" ? `✕ ${(el.text ?? "").slice(0, 10)}` : "✕ " + t("artwork", "رسمة")}
-                          </button>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                )}
-
-                {/* Background + motion (animation) properties */}
-                {studioPanel === "bg" && (
+                                {/* Background + motion (animation) properties */}
+                <StudioSheet
+                  open={studioPanel === "bg"}
+                  icon={<ImageIcon size={15} className="text-cyan-300" />}
+                  title={t("Background & motion", "الخلفية والحركة")}
+                  onClose={() => setStudioPanel(null)}
+                >
                   <div className="rounded-2xl p-3 bg-white/[0.03] border border-white/10 space-y-3">
                     <div>
                       <div className="text-[10px] uppercase tracking-widest text-white/50 mb-1.5">{t("Background", "الخلفية")}</div>
@@ -1321,7 +1328,7 @@ function Modelzon() {
                       </button>
                     </div>
                   </div>
-                )}
+                </StudioSheet>
 
                 {/* 2D Mockup board — the four mockup squares (front / back /
                     sleeves). Tapping a square expands it into the full
@@ -1329,7 +1336,12 @@ function Modelzon() {
                     resize, rotate handle, opacity + fabric-UV sliders,
                     lock/delete, text tool and direct painting — all synced
                     live to the 3D garment above. */}
-                {studioPanel === "layout" && (
+                <StudioSheet
+                  open={studioPanel === "layout"}
+                  icon={<LayoutGrid size={15} className="text-cyan-300" />}
+                  title={t("Mockup board", "الموك اب")}
+                  onClose={() => setStudioPanel(null)}
+                >
                   <MockupBoard2D
                     garment={garment}
                     color={color}
@@ -1350,17 +1362,24 @@ function Modelzon() {
                     onPaintUndo={() => setUndoSignal((n) => n + 1)}
                     onPaintClear={() => setClearSignal((n) => n + 1)}
                   />
-                )}
+                </StudioSheet>
 
 
 
-                {studioPanel === "ai" && user && (
-                  <AIGraphicAssistant
-                    userId={user.id}
-                    lang={lang}
-                    onGenerated={(url) => { addElementToPanel(decalSide === "back" ? "back" : "front", url); void refreshMissions(); }}
-                  />
-                )}
+                <StudioSheet
+                  open={studioPanel === "ai"}
+                  icon={<Sparkles size={15} className="text-cyan-300" />}
+                  title={t("AI design assistant", "المساعد الذكي")}
+                  onClose={() => setStudioPanel(null)}
+                >
+                  {user && (
+                    <AIGraphicAssistant
+                      userId={user.id}
+                      lang={lang}
+                      onGenerated={(url) => { addElementToPanel(decalSide === "back" ? "back" : "front", url); void refreshMissions(); }}
+                    />
+                  )}
+                </StudioSheet>
 
                 {/* Front/back artwork — two real independent slots now:
                     each tab uploads and positions its own image, both are
@@ -1369,8 +1388,51 @@ function Modelzon() {
                 {/* §12 — everything that used to live in the "Edit" tab now
                     lives HERE in Print: print/embroidery type, front/back
                     artwork toggle, upload box and the per-panel element list. */}
-                {studioPanel === "print" && (
+                <StudioSheet
+                  open={studioPanel === "print"}
+                  icon={<Printer size={15} className="text-cyan-300" />}
+                  title={t("Print shop", "قسم الطباعة")}
+                  onClose={() => setStudioPanel(null)}
+                >
                 <div className="rounded-2xl p-3 bg-white/[0.03] border border-white/10 space-y-2">
+                  {/* quick actions (formerly the separate Print tab body) */}
+                  <div className="grid grid-cols-2 gap-2">
+                    <button
+                      onClick={() => artworkFileRef.current?.click()}
+                      className="flex flex-col items-center gap-1 py-3 rounded-xl bg-cyan-400/10 border border-cyan-400/30 text-cyan-100 text-[10px] font-bold hover:bg-cyan-400/20 transition"
+                    >
+                      <Upload size={16} />
+                      {t("Upload artwork", "رفع صورة")}
+                    </button>
+                    <button
+                      onClick={() => setElements((els) => els.slice(0, -1))}
+                      disabled={elements.length === 0}
+                      className="flex flex-col items-center gap-1 py-3 rounded-xl bg-white/[0.04] border border-white/10 text-white/70 text-[10px] font-bold hover:bg-white/[0.08] disabled:opacity-30 transition"
+                    >
+                      <Trash2 size={16} />
+                      {t("Delete last element", "حذف آخر عنصر")}
+                    </button>
+                    <button
+                      onClick={() => setUndoSignal((n) => n + 1)}
+                      className="flex flex-col items-center gap-1 py-3 rounded-xl bg-white/[0.04] border border-white/10 text-white/70 text-[10px] font-bold hover:bg-white/[0.08] transition"
+                    >
+                      <RotateCw size={16} />
+                      {t("Undo paint stroke", "تراجع عن رسمة")}
+                    </button>
+                    <button
+                      onClick={() => setClearSignal((n) => n + 1)}
+                      className="flex flex-col items-center gap-1 py-3 rounded-xl bg-red-500/10 border border-red-400/30 text-red-200 text-[10px] font-bold hover:bg-red-500/20 transition"
+                    >
+                      <X size={16} />
+                      {t("Clear painted layer", "مسح الرسم اليدوي")}
+                    </button>
+                  </div>
+                  <p className="text-[10px] text-white/40 leading-relaxed">
+                    {t(
+                      "Undo/clear apply to the freehand painted layer. Elements (images & text) are managed below or by tapping them on the mockup.",
+                      "التراجع/المسح يخصّان طبقة الرسم اليدوي فقط. العناصر (صور ونصوص) تُدار من الأسفل أو بالضغط عليها في الموك اب.",
+                    )}
+                  </p>
                   {/* Print / embroidery treatment — applies to the ACTIVE side's
                       artwork layer independently (front and back can differ).
                       Garment parts moved to the Layout panel, next to the
@@ -1502,20 +1564,22 @@ function Modelzon() {
                     }}
                   />
                 </div>
-                )}
+                </StudioSheet>
 
-                {studioPanel === "fit" && (
-                <>
-                <div className="rounded-2xl p-3 bg-white/[0.03] border border-white/10 space-y-2">
-                  <div className="text-[10px] uppercase tracking-widest text-white/50 flex items-center gap-1">
-                    <PaletteIcon size={11} /> {t("Base color", "لون القاعدة")}
+                <StudioSheet
+                  open={studioPanel === "fit"}
+                  icon={<PaletteIcon size={15} className="text-cyan-300" />}
+                  title={t("Garment color", "لون القطعة")}
+                  onClose={() => setStudioPanel(null)}
+                >
+                  <div className="rounded-2xl p-3 bg-white/[0.03] border border-white/10 space-y-2">
+                    <div className="text-[10px] uppercase tracking-widest text-white/50 flex items-center gap-1">
+                      <PaletteIcon size={11} /> {t("Base color", "لون القاعدة")}
+                    </div>
+                    <ColorPickerHSV color={color} onChange={changeColor} ar={lang === "ar"} />
                   </div>
-                  <ColorPickerHSV color={color} onChange={changeColor} ar={lang === "ar"} />
+                </StudioSheet>
                 </div>
-
-                </>
-                )}
-
               </div>
             )}
 
