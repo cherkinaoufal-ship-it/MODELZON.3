@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { motion } from "framer-motion";
 import {
-  Brush, ChevronDown, Expand, Lock, LockOpen, Maximize2, Plus, RotateCcw,
+  Brush, Check, ChevronDown, Expand, Link2, Link2Off, Lock, LockOpen, Maximize2, Plus, RotateCcw,
   Trash2, Type as TypeIcon, Upload, X,
 } from "lucide-react";
 import ColorPickerHSV from "./ColorPickerHSV";
@@ -246,6 +246,8 @@ interface DragState {
   startX: number; startY: number;  // pointer at drag start (px)
   startDist: number;
   startAngle: number;
+  /** §6 — locked aspect: on-screen w/h ratio to preserve while resizing. */
+  aspect?: number;
 }
 
 const clamp = (v: number, a: number, b: number) => Math.min(b, Math.max(a, v));
@@ -270,6 +272,31 @@ function PanelEditor({
   const [drag, setDrag] = useState<DragState | null>(null);
   const dragRef = useRef<DragState | null>(null);
   dragRef.current = drag;
+
+  // §6 — unified transform confirmation: snapshot the element when it gets
+  // selected; ✓ keeps the current transform, ✕ reverts to the snapshot.
+  const [selSnap, setSelSnap] = useState<DesignElement | null>(null);
+  const [aspectLock, setAspectLock] = useState(false);
+  useEffect(() => {
+    if (!selectedId) { setSelSnap(null); return; }
+    const el = elements.find((e) => e.id === selectedId);
+    setSelSnap(el ? { ...el } : null);
+    setAspectLock(false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedId]);
+
+  const confirmTransform = () => {
+    if (selectedId) onSelect(null); // transform already applied — keep it
+  };
+  const cancelTransform = () => {
+    if (selectedId && selSnap) {
+      onPatch(selectedId, {
+        x: selSnap.x, y: selSnap.y, w: selSnap.w, h: selSnap.h,
+        rotation: selSnap.rotation, fontScale: selSnap.fontScale, opacity: selSnap.opacity,
+      });
+    }
+    onSelect(null);
+  };
 
   // NOTE: argument order here is (arabic, english) — Arabic-first, matching
   // every call site written for the Arabic-first UI.
@@ -329,7 +356,8 @@ function PanelEditor({
           const r = panelRect();
           if (!r) return;
           const halfW = Math.max(6, (lx * sx) / 2);
-          const halfH = Math.max(6, (ly * sy) / 2);
+          // §6 — aspect locked: height derives from the locked ratio
+          const halfH = Math.max(6, d.aspect ? halfW / d.aspect : (ly * sy) / 2);
           onPatch(d.id, {
             w: clamp((halfW / r.width) * 2, 0.04, 1.6),
             h: clamp((halfH / r.height) * 2, 0.04, 1.6),
@@ -358,6 +386,13 @@ function PanelEditor({
     const cy = r.top + (el.y + 0.5) * r.height;
     onSelect(el.id);
     if (el.locked) return; // selectable but not manipulable until unlocked
+    // §6 — optional aspect-ratio lock: remember the on-screen w/h ratio so a
+    // corner resize keeps proportions (images & garment parts; text already
+    // scales uniformly through fontScale).
+    const aspect =
+      aspectLock && el.kind === "image" && el.h > 0
+        ? (el.w * r.width) / (el.h * r.height)
+        : undefined;
     setDrag({
       mode,
       id: el.id,
@@ -367,6 +402,7 @@ function PanelEditor({
       startY: e.clientY,
       startDist: Math.max(12, Math.hypot(e.clientX - cx, e.clientY - cy)),
       startAngle: (Math.atan2(e.clientX - cx, -(e.clientY - cy)) * 180) / Math.PI,
+      aspect,
     });
   };
 
@@ -433,7 +469,17 @@ function PanelEditor({
               className={drawMode ? "pointer-events-none" : isSel ? "cursor-grab active:cursor-grabbing" : "cursor-pointer"}
               style={base}
             >
-              {isSel && !drawMode && <ElementHandles el={el} onDrag={beginDrag} locked={!!el.locked} />}
+              {isSel && !drawMode && (
+                <ElementHandles
+                  el={el}
+                  onDrag={beginDrag}
+                  locked={!!el.locked}
+                  aspectLock={aspectLock}
+                  onToggleAspect={() => setAspectLock((v) => !v)}
+                  onConfirm={confirmTransform}
+                  onCancel={cancelTransform}
+                />
+              )}
               <span style={{ position: "relative", display: "inline-block", padding: "6px 10px" }}>{body}</span>
             </div>
           );
@@ -445,7 +491,17 @@ function PanelEditor({
             className={drawMode ? "pointer-events-none" : isSel ? "cursor-grab active:cursor-grabbing" : "cursor-pointer"}
             style={{ ...base, width: `${el.w * 100}%`, height: `${el.h * 100}%` }}
           >
-            {isSel && !drawMode && <ElementHandles el={el} onDrag={beginDrag} locked={!!el.locked} />}
+            {isSel && !drawMode && (
+                <ElementHandles
+                  el={el}
+                  onDrag={beginDrag}
+                  locked={!!el.locked}
+                  aspectLock={aspectLock}
+                  onToggleAspect={() => setAspectLock((v) => !v)}
+                  onConfirm={confirmTransform}
+                  onCancel={cancelTransform}
+                />
+              )}
             {body}
           </div>
         );
@@ -470,16 +526,23 @@ function PanelEditor({
   );
 }
 
-/** Selection frame: 4 free-resize corner handles + top rotate handle. */
+/** Selection frame: 4 free-resize corner handles + top rotate handle +
+    §6 confirm ✓ / cancel ✕ actions + optional aspect-ratio lock. */
 function ElementHandles({
-  el, onDrag, locked,
+  el, onDrag, locked, aspectLock, onToggleAspect, onConfirm, onCancel,
 }: {
   el: DesignElement;
   onDrag: (e: React.PointerEvent, mode: DragMode, el: DesignElement) => void;
   locked: boolean;
+  aspectLock: boolean;
+  onToggleAspect: () => void;
+  onConfirm: () => void;
+  onCancel: () => void;
 }) {
   const cornerCls =
     "absolute w-5 h-5 rounded-full border-2 border-black/40 flex items-center justify-center shadow-[0_0_10px_rgba(6,182,212,0.8)] touch-none";
+  // buttons must not start a move-drag (their parent handles pointerdown)
+  const swallow = (e: React.PointerEvent) => { e.stopPropagation(); e.preventDefault(); };
   return (
     <>
       <div className="absolute inset-0 rounded-md border-2 border-dashed border-cyan-300/80 pointer-events-none" />
@@ -510,11 +573,43 @@ function ElementHandles({
               <Maximize2 size={10} className="text-black/70" />
             </div>
           ))}
+          {/* §6 — optional aspect lock (images only; text scales uniformly) */}
+          {el.kind === "image" && (
+            <div
+              onPointerDown={swallow}
+              onClick={onToggleAspect}
+              title={aspectLock ? "إلغاء قفل النسبة" : "قفل النسبة (تحجيم متساوٍ)"}
+              className={`absolute -top-2 left-1/2 -translate-x-1/2 w-5 h-5 rounded-full border border-black/30 flex items-center justify-center transition ${
+                aspectLock ? "bg-amber-400 text-black" : "bg-white/90 text-black/50"
+              }`}
+            >
+              {aspectLock ? <Link2 size={10} /> : <Link2Off size={10} />}
+            </div>
+          )}
         </>
       )}
       {locked && (
         <div className="absolute -top-2 -right-2 w-5 h-5 rounded-full bg-amber-400 border border-black/30 flex items-center justify-center">
           <Lock size={10} className="text-black" />
+        </div>
+      )}
+      {/* §6 — confirm ✓ keeps the transform, cancel ✕ reverts it */}
+      {!locked && (
+        <div className="absolute left-1/2 -bottom-11 -translate-x-1/2 flex items-center gap-2" onPointerDown={swallow}>
+          <button
+            onClick={onConfirm}
+            title="تأكيد"
+            className="w-8 h-8 rounded-full bg-emerald-400 text-black shadow-[0_0_14px_rgba(52,211,153,0.7)] flex items-center justify-center active:scale-95 transition"
+          >
+            <Check size={16} strokeWidth={3} />
+          </button>
+          <button
+            onClick={onCancel}
+            title="إلغاء"
+            className="w-8 h-8 rounded-full bg-red-400 text-black shadow-[0_0_14px_rgba(248,113,113,0.7)] flex items-center justify-center active:scale-95 transition"
+          >
+            <X size={16} strokeWidth={3} />
+          </button>
         </div>
       )}
     </>
