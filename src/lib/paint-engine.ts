@@ -653,60 +653,172 @@ export function drawSegment(
   state.last = to;
 }
 
-/** Flood fill from a point — used by the ColorDrop / bucket tool. */
-export function floodFill(canvas: HTMLCanvasElement, p: Pt, hex: string, tolerance = 42) {
+/* ------------------------------------------------------------------ */
+/* flood fill — §4: real scanline flood fill with part-bound safety    */
+/* ------------------------------------------------------------------ */
+
+/**
+ * A rectangular safety bounds (in canvas px) that confines a fill to ONE
+ * garment part's UV island. Because every part owns a disjoint region of
+ * the shared 1024² texture (torso = the central horizontal band, each
+ * sleeve/leg = its own strip corner — see the UV_ISLANDS maps in
+ * Studio3D.tsx / designElements.ts), clamping the flood to these bounds
+ * makes it physically impossible for a fill on one part to ever spill
+ * onto another part, no matter what the colors underneath look like.
+ */
+export interface FillBounds {
+  x0: number;
+  y0: number;
+  x1: number;
+  y1: number;
+}
+
+/**
+ * Pure pixel-core of the flood fill — operates directly on RGBA bytes so
+ * it is unit-testable in Node without a DOM canvas. Real scanline
+ * algorithm (fills whole unbroken runs per row instead of pushing every
+ * pixel), which is both dramatically faster on large flat areas and
+ * bounded by CLOSED paint strokes only: propagation stops where the
+ * target color stops matching (within `tolerance` per channel).
+ *
+ * `tolerance` (0..255) is the per-channel match slack — the bucket's
+ * "sensitivity" slider maps to it directly. `bounds` keeps the flood
+ * inside the one UV island it started in.
+ */
+export function floodFillPixels(
+  data: Uint8ClampedArray,
+  w: number,
+  h: number,
+  sx: number,
+  sy: number,
+  hex: string,
+  tolerance = 42,
+  bounds?: FillBounds,
+): boolean {
+  const bx0 = Math.max(0, Math.floor(bounds?.x0 ?? 0));
+  const by0 = Math.max(0, Math.floor(bounds?.y0 ?? 0));
+  const bx1 = Math.min(w - 1, Math.floor(bounds?.x1 ?? w - 1));
+  const by1 = Math.min(h - 1, Math.floor(bounds?.y1 ?? h - 1));
+  if (sx < bx0 || sx > bx1 || sy < by0 || sy > by1) return false;
+
+  const si = (sy * w + sx) * 4;
+  const tr = data[si]!, tg = data[si + 1]!, tb = data[si + 2]!, ta = data[si + 3]!;
+  const [fr, fg, fb] = hexToRgb(hex);
+
+  // Already that exact opaque color — nothing to do (also stops infinite
+  // re-fills of the same region from spamming history snapshots).
+  if (
+    ta === 255 &&
+    Math.abs(tr - fr) < 3 && Math.abs(tg - fg) < 3 && Math.abs(tb - fb) < 3
+  ) {
+    return false;
+  }
+
+  const tol = Math.max(0, Math.min(255, Math.round(tolerance)));
+  const match = (i: number) => {
+    const o = i * 4;
+    return (
+      Math.abs(data[o]! - tr) <= tol &&
+      Math.abs(data[o + 1]! - tg) <= tol &&
+      Math.abs(data[o + 2]! - tb) <= tol &&
+      Math.abs(data[o + 3]! - ta) <= tol
+    );
+  };
+
+  const seen = new Uint8Array(w * h);
+  const spanFill = (row: number, startX: number): [number, number] | null => {
+    // expand left/right along `row` from startX while pixels match
+    let xl = startX;
+    let xr = startX;
+    const rowOff = row * w;
+    while (xl > bx0 && !seen[rowOff + xl - 1] && match(rowOff + xl - 1)) xl--;
+    while (xr < bx1 && !seen[rowOff + xr + 1] && match(rowOff + xr + 1)) xr++;
+    // paint the span
+    for (let x = xl; x <= xr; x++) {
+      const i = rowOff + x;
+      if (seen[i]) continue;
+      seen[i] = 1;
+      const o = i * 4;
+      data[o] = fr;
+      data[o + 1] = fg;
+      data[o + 2] = fb;
+      data[o + 3] = 255;
+    }
+    return [xl, xr];
+  };
+
+  let anyFilled = false;
+  const stack: [number, number][] = [[sx, sy]];
+  while (stack.length) {
+    const [px, py] = stack.pop()!;
+    if (seen[py * w + px]) continue;
+    if (!match(py * w + px)) continue;
+    const span = spanFill(py, px);
+    if (!span) continue;
+    const [xl, xr] = span;
+    anyFilled = true;
+
+    // scan the rows above and below the just-filled span for new regions
+    for (const ny of [py - 1, py + 1]) {
+      if (ny < by0 || ny > by1) continue;
+      let inRun = false;
+      for (let x = xl; x <= xr; x++) {
+        const i = ny * w + x;
+        const cont = !seen[i] && match(i);
+        if (cont && !inRun) {
+          stack.push([x, ny]);
+          inRun = true;
+        } else if (!cont) {
+          inRun = false;
+        }
+      }
+    }
+  }
+  return anyFilled;
+}
+
+/** Flood fill from a point on a real <canvas> — used by the ColorDrop /
+ *  bucket tool ONLY (the freehand draw path never calls this — §4).
+ *  `bounds` confines the fill to the part's UV island so color can never
+ *  cross from one garment piece to another. */
+export function floodFill(
+  canvas: HTMLCanvasElement,
+  p: Pt,
+  hex: string,
+  tolerance = 42,
+  bounds?: FillBounds,
+) {
   const ctx = canvas.getContext("2d", { willReadFrequently: true });
   if (!ctx) return;
   const w = canvas.width;
   const h = canvas.height;
   const img = ctx.getImageData(0, 0, w, h);
-  const data = img.data;
-  const sx = Math.round(p.x);
-  const sy = Math.round(p.y);
-  if (sx < 0 || sy < 0 || sx >= w || sy >= h) return;
-  const si = (sy * w + sx) * 4;
-  const target = [data[si]!, data[si + 1]!, data[si + 2]!, data[si + 3]!];
-  const [fr, fg, fb] = hexToRgb(hex);
-  if (Math.abs(target[0]! - fr) < 3 && Math.abs(target[1]! - fg) < 3 && Math.abs(target[2]! - fb) < 3 && target[3] === 255) return;
-
-  const stack = [sy * w + sx];
-  const seen = new Uint8Array(w * h);
-  const match = (i: number) => {
-    const o = i * 4;
-    return (
-      Math.abs(data[o]! - target[0]!) <= tolerance &&
-      Math.abs(data[o + 1]! - target[1]!) <= tolerance &&
-      Math.abs(data[o + 2]! - target[2]!) <= tolerance &&
-      Math.abs(data[o + 3]! - target[3]!) <= tolerance
-    );
-  };
-
-  while (stack.length) {
-    const i = stack.pop()!;
-    if (seen[i]) continue;
-    seen[i] = 1;
-    if (!match(i)) continue;
-    const o = i * 4;
-    data[o] = fr; data[o + 1] = fg; data[o + 2] = fb; data[o + 3] = 255;
-    const x = i % w;
-    const y = (i - x) / w;
-    if (x > 0) stack.push(i - 1);
-    if (x < w - 1) stack.push(i + 1);
-    if (y > 0) stack.push(i - w);
-    if (y < h - 1) stack.push(i + w);
-  }
-  ctx.putImageData(img, 0, 0);
+  const changed = floodFillPixels(
+    img.data, w, h,
+    Math.round(p.x), Math.round(p.y),
+    hex, tolerance, bounds,
+  );
+  if (changed) ctx.putImageData(img, 0, 0);
 }
 
-/** Soft linear gradient sweep across the whole texture. */
-export function applyGradient(canvas: HTMLCanvasElement, from: Pt, to: Pt, hex: string, opacity: number) {
+/** Soft linear gradient sweep — §4: clipped to the active part's UV island
+ *  (bounds), so a gradient drag can never paint outside the piece it
+ *  started on. */
+export function applyGradient(canvas: HTMLCanvasElement, from: Pt, to: Pt, hex: string, opacity: number, bounds?: FillBounds) {
   const ctx = canvas.getContext("2d");
   if (!ctx) return;
   const g = ctx.createLinearGradient(from.x, from.y, to.x, to.y);
   g.addColorStop(0, rgba(hex, opacity));
   g.addColorStop(1, rgba(hex, 0));
+  ctx.save();
+  if (bounds) {
+    ctx.beginPath();
+    ctx.rect(bounds.x0, bounds.y0, bounds.x1 - bounds.x0, bounds.y1 - bounds.y0);
+    ctx.clip();
+  }
   ctx.fillStyle = g;
   ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.restore();
 }
 
 /** Stamps text (typography tool) centred on the given point. */

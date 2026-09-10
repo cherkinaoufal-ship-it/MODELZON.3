@@ -116,6 +116,40 @@ export function newTextElement(panel: PanelId, style: TextElementStyle): DesignE
 /* panel regions — design space (y down) → raw texture space (v up)    */
 /* ------------------------------------------------------------------ */
 
+/* §4 — DISJOINT UV ISLANDS (the mirror-bug fix, design-side).
+ *
+ * The old front panel mapped the full 0..1 texture width, but a lathe
+ * torso wraps u once around the WHOLE 360° revolution. So artwork drawn
+ * across the mockup panel was stamped twice around the body — once on
+ * the front hemisphere and once, mirrored, on the back — which is exactly
+ * the reported "I drew on one side and it appeared on the other side too"
+ * mirror bug. The fix: every panel now owns ONE disjoint region:
+ *
+ *      v 0.00 ───────────────────────────────────  texture top
+ *             │  sleeveL box  │  sleeveR box   │   (top strip — limbs)
+ *      v 0.16 ├──────────────────────────────────┤
+ *             │        TORSO BAND              │   front = u 0.75→0.25
+ *             │  (front + back hemispheres)    │   back  = u 0.25→0.75
+ *      v 0.84 ├──────────────────────────────────┤
+ *             │  legL box     │  legR box       │  (bottom strip — legs)
+ *      v 1.00 ───────────────────────────────────  texture bottom
+ *
+ * The torso NEVER samples the limb strips (its geometry UVs are remapped
+ * into the band — see remapLathedBodyUvs / remapLimbUvsToBox in
+ * Studio3D.tsx) and limbs never sample the band. Front and back are now
+ * strict hemispheres, so a stroke on one side can NEVER appear on the
+ * other, mirrored or otherwise — each side is fully independent. */
+
+/** Torso band vertical bounds (v, texture space). */
+export const BODY_V0 = 0.16;
+export const BODY_V1 = 0.84;
+/** Limb strip insets. */
+const SLEEVE_IN = 0.015;
+/** Top strip height (sleeves) — keep in sync with Studio3D's LIMB_TOP_V. */
+export const LIMB_TOP_V = 0.16;
+/** Bottom strip start (legs). */
+export const LIMB_BOTTOM_V = 0.84;
+
 interface Region {
   /** design (dx,dy) → raw u,v (both 0..1 in texture space) */
   u: (dx: number) => number;
@@ -127,34 +161,43 @@ interface Region {
   wrapX: boolean;
 }
 
-const SLEEVE_PAD = 0.12; // must match remapUvToCorner's pad in Studio3D.tsx
-const SLEEVE_IN = 0.015;
-const SLEEVE_OUT = 0.105;
-
 export const PANEL_REGIONS: Record<PanelId, Region> = {
-  front: { u: (dx) => 0.5 + dx, v: (dy) => 0.5 - dy, wScale: 1, hScale: 1, wrapX: false },
-  back: {
-    // back of the garment lives around the u=0/1 seam (see drawDecal's
-    // TEX/2 shift) — an element at design dx=0 straddles the seam, so the
-    // compositor also stamps wrapped copies at ±TEX.
-    u: (dx) => ((dx % 1) + 1) % 1,
-    v: (dy) => 0.5 - dy,
-    wScale: 1,
-    hScale: 1,
-    wrapX: true,
+  // FRONT panel = the front hemisphere ONLY: u from 0.75 (screen-left,
+  // world −X) wrapping through 0 (front-center) to 0.25 (screen-right,
+  // world +X). Panel-left lands screen-left, panel-right lands
+  // screen-right — no mirroring, no wrap onto the back half.
+  front: {
+    u: (dx) => (((0.75 + (dx + 0.5) * 0.5) % 1) + 1) % 1,
+    v: (dy) => BODY_V0 + (0.5 - dy) * (BODY_V1 - BODY_V0),
+    wScale: 0.5,
+    hScale: BODY_V1 - BODY_V0,
+    wrapX: true, // the front hemisphere straddles the u=0/1 seam
   },
-  sleeveL: {
-    u: (dx) => SLEEVE_IN + (dx + 0.5) * (SLEEVE_OUT - SLEEVE_IN),
-    v: (dy) => SLEEVE_IN + (0.5 - dy) * (SLEEVE_OUT - SLEEVE_IN),
-    wScale: SLEEVE_OUT - SLEEVE_IN,
-    hScale: SLEEVE_OUT - SLEEVE_IN,
+  // BACK panel = the back hemisphere ONLY: u 0.25 → 0.75 (back-center at
+  // 0.5). Viewed from behind, world +X (u=0.25) is screen-left, so panel
+  // orientation reads naturally without mirroring.
+  back: {
+    u: (dx) => 0.25 + (dx + 0.5) * 0.5,
+    v: (dy) => BODY_V0 + (0.5 - dy) * (BODY_V1 - BODY_V0),
+    wScale: 0.5,
+    hScale: BODY_V1 - BODY_V0,
     wrapX: false,
   },
+  // Left sleeve owns the top-left half of the top strip.
+  sleeveL: {
+    u: (dx) => SLEEVE_IN + (dx + 0.5) * (0.5 - 2 * SLEEVE_IN),
+    v: (dy) => SLEEVE_IN + (0.5 - dy) * (LIMB_TOP_V - 2 * SLEEVE_IN),
+    wScale: 0.5 - 2 * SLEEVE_IN,
+    hScale: LIMB_TOP_V - 2 * SLEEVE_IN,
+    wrapX: false,
+  },
+  // Right sleeve owns the top-right half of the top strip — fully
+  // disjoint from the left sleeve.
   sleeveR: {
-    u: (dx) => 1 - SLEEVE_OUT + (dx + 0.5) * (SLEEVE_OUT - SLEEVE_IN),
-    v: (dy) => SLEEVE_IN + (0.5 - dy) * (SLEEVE_OUT - SLEEVE_IN),
-    wScale: SLEEVE_OUT - SLEEVE_IN,
-    hScale: SLEEVE_OUT - SLEEVE_IN,
+    u: (dx) => 0.5 + SLEEVE_IN + (dx + 0.5) * (0.5 - 2 * SLEEVE_IN),
+    v: (dy) => SLEEVE_IN + (0.5 - dy) * (LIMB_TOP_V - 2 * SLEEVE_IN),
+    wScale: 0.5 - 2 * SLEEVE_IN,
+    hScale: LIMB_TOP_V - 2 * SLEEVE_IN,
     wrapX: false,
   },
 };
@@ -186,7 +229,7 @@ function renderScratch(
     if (!img || !img.naturalWidth) return null;
     ctx.drawImage(img, -W / 2, -H / 2, W, H);
   } else {
-    const fontSize = Math.max(6, (el.fontScale ?? 0.18) * TEX * (el.panel === "front" || el.panel === "back" ? 1 : SLEEVE_OUT - SLEEVE_IN));
+    const fontSize = Math.max(6, (el.fontScale ?? 0.18) * TEX * (el.panel === "front" || el.panel === "back" ? 1 : LIMB_TOP_V - 2 * SLEEVE_IN));
     ctx.font = `${el.bold ? 900 : 400} ${fontSize}px ${el.font ?? "Cairo"}, sans-serif`;
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
@@ -303,6 +346,16 @@ export interface ComposeResult {
   hasBack: boolean;
 }
 
+/**
+ * §5 — layer order contract: elements composite strictly in ARRAY (insertion)
+ * order. Uploaded images always render ABOVE the garment's base-color layer
+ * (the compositor output is stamped over `layers.base` in Studio3D) and
+ * BELOW any text/typography element added after them — nothing here reorders
+ * the array, so what the person built first-to-last is exactly what renders
+ * bottom-to-top, and the same order is preserved by the save/production
+ * pipeline (both the raw overlays handed to Studio3D and the pretty
+ * decal_url previews iterate this same array).
+ */
 export function composeElements(
   elements: DesignElement[],
   images: ElementImages,
@@ -324,21 +377,23 @@ export function composeElements(
     const ctx = c.getContext("2d");
     if (!ctx) return null;
     if (raw) {
-      // §11 glitch fix — the sleeve UV corners are RESERVED texture areas.
-      // Body (front/back) artwork must never spill into them (it used to
-      // show up as stray cropped fragments floating over sleeve uploads),
-      // and sleeve artwork must never leak out of its own corner box.
-      const pad = SLEEVE_PAD * TEX;
+      // §4 island discipline — body (front/back) elements are hard-clipped
+      // to the torso band (they may never touch the limb strips), and each
+      // sleeve element is hard-clipped to its OWN half of the top strip.
+      // This is the compositor-side twin of the geometry-side UV remap in
+      // Studio3D — together they guarantee a pixel painted for one part
+      // can never show up on another.
+      const stripTop = LIMB_TOP_V * TEX;
+      const stripBottom = LIMB_BOTTOM_V * TEX;
+      const halfW = TEX / 2;
       const bodyEls = els.filter((e) => e.panel === "front" || e.panel === "back");
       const sleeveEls = els.filter((e) => e.panel === "sleeveL" || e.panel === "sleeveR");
       if (bodyEls.length > 0) {
         ctx.save();
-        // clip = full canvas MINUS the two sleeve corner boxes (evenodd)
+        // clip = torso band only (full width, between the two limb strips)
         ctx.beginPath();
-        ctx.rect(0, 0, TEX, TEX);
-        ctx.rect(0, 0, pad, pad);
-        ctx.rect(TEX - pad, 0, pad, pad);
-        ctx.clip("evenodd");
+        ctx.rect(0, stripTop, TEX, stripBottom - stripTop);
+        ctx.clip();
         for (const el of bodyEls) {
           const img = el.kind === "image" && el.src ? images.get(el.src) : undefined;
           drawElementRaw(ctx, el, img, deco);
@@ -349,8 +404,8 @@ export function composeElements(
         const img = el.kind === "image" && el.src ? images.get(el.src) : undefined;
         ctx.save();
         ctx.beginPath();
-        if (el.panel === "sleeveL") ctx.rect(0, 0, pad, pad);
-        else ctx.rect(TEX - pad, 0, pad, pad);
+        if (el.panel === "sleeveL") ctx.rect(0, 0, halfW, stripTop);
+        else ctx.rect(halfW, 0, halfW, stripTop);
         ctx.clip();
         drawElementRaw(ctx, el, img, {});
         ctx.restore();

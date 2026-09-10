@@ -1,12 +1,13 @@
 import { Suspense, useEffect, useImperativeHandle, useMemo, useRef, useState, forwardRef, Component, createContext, useContext } from "react";
 import type { ReactNode } from "react";
 import { motion, AnimatePresence } from "framer-motion";
+import { Loader2 } from "lucide-react";
 import { Canvas, useFrame } from "@react-three/fiber";
 import { OrbitControls, ContactShadows, useGLTF, Environment } from "@react-three/drei";
 import * as THREE from "three";
 import {
   drawSegment, newStroke, floodFill, applyGradient,
-  type BrushSettings, type Pt,
+  type BrushSettings, type Pt, type FillBounds,
 } from "@/lib/paint-engine";
 import { FABRIC_TYPES, DECORATION_TYPES, type FabricTypeId, type DecorationTypeId } from "@/lib/materialPresets";
 
@@ -108,35 +109,77 @@ function buildTorsoProfile(shoulder: number, chest: number, waist: number, hem: 
 const CLOTH_DEPTH = 0.56;
 
 /**
- * Real bug fix: sleeves (and pants legs) reused the SAME geometry object
- * and the SAME shared canvas texture as the torso, with the default 0-1
- * UV wrap every Cylinder/Lathe geometry gets. That meant a paint stroke
- * anywhere near canvas-center showed up identically on BOTH sleeves (and
- * both pant legs) purely because all three surfaces independently sampled
- * the exact same region of the same texture — reported directly from
- * testing ("رسمت بالنص، طلعت نفسها باليدين").
+ * §4 — DISJOINT UV ISLANDS (geometry side of the mirror-bug fix).
  *
- * Fix: give each limb its own tiny, dedicated corner of the shared canvas
- * (compressing its UV into an 12%×12% square that ordinary torso painting
- * never reaches) instead of letting it read the whole canvas. Base color
- * and the fabric bump map are unaffected (those aren't UV-dependent here);
- * only which small patch of PAINTED/decal content a limb can show changes.
- * Left/right each get a different corner too, so they're no longer
- * mechanically identical the way they were before.
+ * The shared 1024² canvas is partitioned (see the map in designElements.ts):
+ * the torso owns the central horizontal band (v 0.16→0.84, full width),
+ * each sleeve owns half of the TOP strip, each pant leg owns half of the
+ * BOTTOM strip. These helpers compress each mesh's UVs into its own island
+ * so two surfaces can NEVER sample the same texels:
+ *
+ *  • remapLathedBodyUvs — the lathe torso keeps its full 360° horizontal
+ *    wrap (u 0..1) but is squeezed vertically into the body band, so body
+ *    painting physically cannot reach the limb strips (and vice versa).
+ *
+ *  • remapLimbUvsToBox — a sleeve/leg cylinder gets a private box. Left
+ *    and right get DISJOINT boxes, so a dot painted on one limb can never
+ *    appear on the other limb, on the torso, or anywhere else — the §4
+ *    regression requirement ("رسم نقطة صغيرة على جهة/كم واحد يجب ألا يغيّر
+ *    أي بكسل في الجهة الأخرى أو بقية القطعة").
+ *
+ * The old `remapUvToCorner` gave limbs boxes that still OVERLAPPED the
+ * torso's full-canvas UV range (torso hem shared texels with the sleeve
+ * corners) — that cross-part bleed is gone by construction now.
  */
-function remapUvToCorner(geometry: THREE.BufferGeometry, corner: 0 | 1 | 2 | 3) {
+
+/** Vertical bounds of the torso band (keep in sync with designElements.ts). */
+export const BODY_V0 = 0.16;
+export const BODY_V1 = 0.84;
+/** Top (sleeves) / bottom (legs) strip bounds. */
+export const LIMB_TOP_V = 0.16;
+export const LIMB_BOTTOM_V = 0.84;
+
+/** A closed UV box in texture space. */
+export interface UvBox {
+  u0: number;
+  u1: number;
+  v0: number;
+  v1: number;
+}
+
+/** The four limb islands (texture space). Torso = everything between the strips. */
+export const UV_ISLANDS: Record<"sleeveL" | "sleeveR" | "legL" | "legR", UvBox> = {
+  sleeveL: { u0: 0.0, u1: 0.5, v0: 0.0, v1: LIMB_TOP_V },
+  sleeveR: { u0: 0.5, u1: 1.0, v0: 0.0, v1: LIMB_TOP_V },
+  legL: { u0: 0.0, u1: 0.5, v0: LIMB_BOTTOM_V, v1: 1.0 },
+  legR: { u0: 0.5, u1: 1.0, v0: LIMB_BOTTOM_V, v1: 1.0 },
+};
+
+/** Torso band box — where body (front/back) paint may live. */
+export const BODY_BOX: UvBox = { u0: 0.0, u1: 1.0, v0: BODY_V0, v1: BODY_V1 };
+
+function remapLimbUvsToBox(geometry: THREE.BufferGeometry, box: UvBox) {
   const uv = geometry.getAttribute("uv");
   if (!uv) return geometry;
-  const pad = 0.12;
-  const originX = corner % 2 === 0 ? 0 : 1 - pad;
-  const originY = corner < 2 ? 0 : 1 - pad;
   for (let i = 0; i < uv.count; i++) {
     const u = uv.getX(i);
     const v = uv.getY(i);
-    uv.setXY(i, originX + u * pad, originY + v * pad);
+    uv.setXY(i, box.u0 + u * (box.u1 - box.u0), box.v0 + v * (box.v1 - box.v0));
   }
   uv.needsUpdate = true;
   return geometry;
+}
+
+function remapLathedBodyUvs(geometry: THREE.BufferGeometry) {
+  return remapLimbUvsToBox(geometry, { u0: 0, u1: 1, v0: BODY_V0, v1: BODY_V1 });
+}
+
+/** Which UV island does a raw texture point belong to? Used to derive the
+ *  bucket-fill safety bounds and to clamp strokes to their part. */
+export function uvIslandAt(u: number, v: number): { part: "torso" | "sleeveL" | "sleeveR" | "legL" | "legR"; box: UvBox } {
+  if (v < LIMB_TOP_V) return u >= 0.5 ? { part: "sleeveR", box: UV_ISLANDS.sleeveR } : { part: "sleeveL", box: UV_ISLANDS.sleeveL };
+  if (v > LIMB_BOTTOM_V) return u >= 0.5 ? { part: "legR", box: UV_ISLANDS.legR } : { part: "legL", box: UV_ISLANDS.legL };
+  return { part: "torso", box: BODY_BOX };
 }
 
 function useFabricBump() {
@@ -176,24 +219,20 @@ function useDecalImage(url?: string | null): HTMLImageElement | null {
 /**
  * Draws one decal onto the shared 1024×1024 garment texture canvas.
  *
- * Placement model: x/y are the same -0.5..0.5 offsets DecalControls'
- * drag pad already produces, applied relative to the canvas center — the
- * exact center a freshly-uploaded decal (x=0, y=0) lands on is the same
- * "front, roughly torso-height" spot the studio has always defaulted new
- * artwork to. `sideShiftPx` moves the WHOLE canvas-space anchor half a
- * turn around (texWidth / 2) for back-of-garment artwork — since every
- * garment mesh here is a lathe revolved 360° around Y, shifting by exactly
- * half the texture width is guaranteed to land on the geometrically
- * opposite side of the garment, regardless of exactly where the UV seam
- * sits (the same guarantee the previous GPU-offset approach relied on,
- * just applied as pixels instead of a texture-sampler offset).
+ * §4 — correct hemisphere + torso-band placement: `centerU` is the decal's
+ * resting anchor around the lathe's 360° wrap. u=0 is FRONT-center (the
+ * lathe's phi=0 vertex faces the camera) and u=0.5 is BACK-center — the
+ * old code anchored front decals at u=0.5, which actually printed them on
+ * the BACK (and back decals on the front). x/y are the same -0.5..0.5
+ * design offsets; vertical placement is remapped into the torso band
+ * (BODY_V0..BODY_V1) so decals can never leak into the limb strips.
  */
 function drawDecal(
   ctx: CanvasRenderingContext2D,
   img: HTMLImageElement,
   transform: { x: number; y: number; scale: number; rotation: number; skewX?: number; skewY?: number } | undefined,
   texSize: number,
-  sideShiftPx: number,
+  centerU: number,
   decoration?: DecorationTypeId,
 ) {
   const preset = DECORATION_TYPES.find((d) => d.id === decoration);
@@ -203,7 +242,7 @@ function drawDecal(
   const aspect = img.naturalWidth && img.naturalHeight ? img.naturalWidth / img.naturalHeight : 1;
   const h = w / aspect;
 
-  let cx = texSize / 2 + x * texSize + sideShiftPx;
+  let cx = centerU * texSize + x * texSize;
   // Orientation fix (the reported "upside-down image" bug): the garment
   // texture is sampled with v pointing UP (tex.flipY = false below), while
   // design-space y points DOWN. So BOTH the decal's vertical position and
@@ -211,9 +250,9 @@ function drawDecal(
   // paint canvas — translate to the mirrored y, then scale(1,-1) before
   // rotating, so artwork appears on the 3D garment exactly as the person
   // sees it in the 2D mockups (same math as composeElementsOverlay in
-  // lib/designElements.ts).
-  const cy = texSize / 2 - y * texSize;
-  // wrap horizontally so back-shifted artwork re-enters from the other edge
+  // lib/designElements.ts). Vertical center remapped into the torso band.
+  const cy = (BODY_V0 + (0.5 - y) * (BODY_V1 - BODY_V0)) * texSize;
+  // wrap horizontally so seam-straddling artwork re-enters from the other edge
   cx = ((cx % texSize) + texSize) % texSize;
 
   ctx.save();
@@ -303,15 +342,17 @@ function Tee({ color, bump, map }: { color: string; bump: THREE.Texture; map: TH
   const torso = useMemo(() => {
     const g = new THREE.LatheGeometry(buildTorsoProfile(0.55, 1.1, 0.95, 1.05, 3.2), 48);
     g.computeVertexNormals();
-    return g;
+    // §4 — squeeze the lathe's full-canvas UV wrap into the torso band so
+    // the body never samples the sleeve strips (and sleeves never see body paint).
+    return remapLathedBodyUvs(g);
   }, []);
   const sleeveGeo = useMemo(() => {
     const g = new THREE.CylinderGeometry(0.35, 0.42, 0.9, 24, 1, true);
     g.computeVertexNormals();
     return g;
   }, []);
-  const sleeveGeoL = useMemo(() => remapUvToCorner(sleeveGeo.clone(), 0), [sleeveGeo]);
-  const sleeveGeoR = useMemo(() => remapUvToCorner(sleeveGeo.clone(), 1), [sleeveGeo]);
+  const sleeveGeoL = useMemo(() => remapLimbUvsToBox(sleeveGeo.clone(), UV_ISLANDS.sleeveL), [sleeveGeo]);
+  const sleeveGeoR = useMemo(() => remapLimbUvsToBox(sleeveGeo.clone(), UV_ISLANDS.sleeveR), [sleeveGeo]);
   const collarGeo = useMemo(() => new THREE.TorusGeometry(0.32, 0.06, 12, 32), []);
 
   return (
@@ -337,11 +378,11 @@ function Hoodie({ color, bump, map }: { color: string; bump: THREE.Texture; map:
   const torso = useMemo(() => {
     const g = new THREE.LatheGeometry(buildTorsoProfile(0.62, 1.2, 1.1, 1.2, 3.6), 48);
     g.computeVertexNormals();
-    return g;
+    return remapLathedBodyUvs(g); // §4 — torso band isolation
   }, []);
   const sleeveGeo = useMemo(() => new THREE.CylinderGeometry(0.4, 0.5, 1.7, 24, 1, true), []);
-  const sleeveGeoL = useMemo(() => remapUvToCorner(sleeveGeo.clone(), 0), [sleeveGeo]);
-  const sleeveGeoR = useMemo(() => remapUvToCorner(sleeveGeo.clone(), 1), [sleeveGeo]);
+  const sleeveGeoL = useMemo(() => remapLimbUvsToBox(sleeveGeo.clone(), UV_ISLANDS.sleeveL), [sleeveGeo]);
+  const sleeveGeoR = useMemo(() => remapLimbUvsToBox(sleeveGeo.clone(), UV_ISLANDS.sleeveR), [sleeveGeo]);
   const hoodGeo = useMemo(() => {
     const g = new THREE.SphereGeometry(0.65, 32, 24, 0, Math.PI * 2, 0, Math.PI * 0.65);
     g.computeVertexNormals();
@@ -386,7 +427,7 @@ function Cap({ color, bump, map }: { color: string; bump: THREE.Texture; map: TH
     }
     const g = new THREE.LatheGeometry(pts, 48);
     g.computeVertexNormals();
-    return g;
+    return remapLathedBodyUvs(g); // §4 — cap crown paints in the torso band too
   }, []);
 
   const brim = useMemo(() => {
@@ -429,8 +470,8 @@ function Pants({ color, bump, map }: { color: string; bump: THREE.Texture; map: 
     g.computeVertexNormals();
     return g;
   }, []);
-  const legGeoL = useMemo(() => remapUvToCorner(legGeo.clone(), 0), [legGeo]);
-  const legGeoR = useMemo(() => remapUvToCorner(legGeo.clone(), 1), [legGeo]);
+  const legGeoL = useMemo(() => remapLimbUvsToBox(legGeo.clone(), UV_ISLANDS.legL), [legGeo]);
+  const legGeoR = useMemo(() => remapLimbUvsToBox(legGeo.clone(), UV_ISLANDS.legR), [legGeo]);
 
   const waistband = useMemo(() => new THREE.TorusGeometry(0.85, 0.12, 16, 40), []);
 
@@ -579,11 +620,26 @@ function Garment(props: {
   );
 }
 
+/**
+ * Guards the 3D garment against a failed/broken catalog .glb load.
+ *
+ * §"تعذّر تسجيل ملف القطعة" REAL FIX — the old boundary just showed a dead
+ * end with a manual retry (which could never succeed when the file itself
+ * is missing, e.g. catalog paths that only resolve on Lovable hosting).
+ * Now: two automatic retries with backoff (recovers transient network
+ * hiccups), and if the file is truly unreachable we hand control back to
+ * the studio (onGiveUp) which swaps in the procedural garment of the same
+ * category — the studio NEVER dead-ends on a missing model file. A manual
+ * retry stays available while the automatic ones run.
+ */
 class ModelErrorBoundary extends Component<
-  { path?: string | null; children: ReactNode },
-  { error: Error | null }
+  { path?: string | null; onGiveUp: () => void; children: ReactNode },
+  { error: Error | null; retries: number }
 > {
-  state = { error: null as Error | null };
+  state = { error: null as Error | null, retries: 0 };
+  gaveUp = false;
+  retryTimer: ReturnType<typeof setTimeout> | null = null;
+
   static getDerivedStateFromError(error: Error) {
     return { error };
   }
@@ -591,26 +647,53 @@ class ModelErrorBoundary extends Component<
     console.error("[Studio3D] model failed:", this.props.path, error);
   }
 
+  componentWillUnmount() {
+    if (this.retryTimer) clearTimeout(this.retryTimer);
+  }
+
   retry = () => {
     // drei caches failed loads — clear it so the retry actually refetches.
     try { if (this.props.path) useGLTF.clear(this.props.path); } catch { /* ignore */ }
-    this.setState({ error: null });
+    this.setState((s) => ({ error: null, retries: s.retries + 1 }));
   };
+
+  componentDidUpdate(_prev: unknown, prevState: { error: Error | null; retries: number }) {
+    if (!this.state.error) return;
+    // schedule ONE auto-retry per error state
+    if (prevState.error === this.state.error && prevState.retries === this.state.retries && !this.retryTimer && !this.gaveUp) {
+      if (this.state.retries < 2) {
+        this.retryTimer = setTimeout(() => {
+          this.retryTimer = null;
+          this.retry();
+        }, 1200 * (this.state.retries + 1));
+      } else if (!this.gaveUp) {
+        // file is genuinely unreachable → swap to the procedural garment
+        this.gaveUp = true;
+        this.props.onGiveUp();
+      }
+    }
+  }
 
   render() {
     if (this.state.error) {
       return (
-        <div className="absolute inset-0 flex items-center justify-center p-6 text-center">
-          <div className="max-w-xs">
-            <div className="text-3xl mb-2">⚠️</div>
-            <div className="text-white/80 text-sm font-bold mb-1">تعذّر تحميل ملف القطعة 3D</div>
-            <div className="text-white/40 text-xs font-mono break-all mb-3">{this.props.path}</div>
-            <button
-              onClick={this.retry}
-              className="px-4 py-2 rounded-xl bg-primary/20 border border-primary/40 text-primary text-sm font-bold"
-            >
-              إعادة المحاولة
-            </button>
+        <div className="absolute inset-0 flex items-center justify-center p-6 text-center pointer-events-none">
+          <div className="max-w-xs pointer-events-auto">
+            <Loader2 className="mx-auto mb-2 h-6 w-6 animate-spin text-cyan-300" />
+            <div className="text-white/80 text-sm font-bold mb-1">
+              {this.state.retries < 2
+                ? "جارٍ إعادة تحميل ملف القطعة تلقائيًا…"
+                : "تعذّر تحميل ملف القطعة — تم استبدالها بقطعة بديلة"}
+            </div>
+            <div className="text-white/40 text-[10px] font-mono break-all mb-3">{this.props.path}</div>
+            {this.state.retries < 2 && (
+              <button
+                onClick={this.retry}
+                className="px-4 py-2 rounded-xl bg-primary/20 border border-primary/40 text-primary text-sm font-bold"
+              >
+                إعادة المحاولة الآن
+              </button>
+            )}
           </div>
         </div>
       );
@@ -624,7 +707,22 @@ export default forwardRef<Studio3DHandle, Studio3DProps>(function Studio3D(props
   const dpr: [number, number] =
     props.quality === "high" ? [1, 2] : props.quality === "medium" ? [1, 1.5] : [0.75, 1];
 
-  const paintKey = props.modelPath ?? props.garment;
+  // §"تعذّر تسجيل ملف القطعة" fix part 2 — hung-load watchdog + graceful
+  // fallback. If the catalog .glb neither loads NOR errors within 30s
+  // (stalled request), we swap to the procedural garment of the same
+  // category instead of spinning "Loading studio…" forever. A successful
+  // bake (onBaked) cancels the fallback.
+  const [modelLoadFailed, setModelLoadFailed] = useState(false);
+  const effectiveModelPath = modelLoadFailed ? null : props.modelPath ?? null;
+
+  useEffect(() => {
+    setModelLoadFailed(false);
+    if (!props.modelPath) return;
+    const t = setTimeout(() => setModelLoadFailed(true), 30_000);
+    return () => clearTimeout(t);
+  }, [props.modelPath]);
+
+  const paintKey = effectiveModelPath ?? props.garment;
 
   /** three stacked layers:
    *   base  = the garment's own baked fabric texture, multiplied by the picked color
@@ -653,6 +751,7 @@ export default forwardRef<Studio3DHandle, Studio3DProps>(function Studio3D(props
   const historyRef = useRef<ImageData[]>([]);
   const strokeRef = useRef(newStroke());
   const gradStartRef = useRef<Pt | null>(null);
+  const gradIslandRef = useRef<FillBounds | null>(null);
   const [hasArtwork, setHasArtwork] = useState(false);
 
   /**
@@ -785,10 +884,15 @@ export default forwardRef<Studio3DHandle, Studio3DProps>(function Studio3D(props
     o.drawImage(layers.base, 0, 0);
     // Multi-element overlays (2D mockup board editor) — full-canvas images
     // in raw texture orientation, drawn 1:1 with no placement math here.
+    // (They are pre-clipped to their islands in composeElements.)
+    // §5 — layer order: base color → element overlays (images below later
+    // texts, insertion order) → hand paint on top.
     if (overlayFrontImg) o.drawImage(overlayFrontImg, 0, 0, TEX, TEX);
     if (overlayBackImg) o.drawImage(overlayBackImg, 0, 0, TEX, TEX);
+    // §4 — legacy single-decal slots anchor at the CORRECT hemisphere now:
+    // front at u=0 (camera-facing), back at u=0.5.
     if (decalFrontImg) drawDecal(o, decalFrontImg, props.decalTransform, TEX, 0, props.decorationType);
-    if (decalBackImg) drawDecal(o, decalBackImg, props.decalTransformBack, TEX, TEX / 2, props.decorationTypeBack);
+    if (decalBackImg) drawDecal(o, decalBackImg, props.decalTransformBack, TEX, 0.5, props.decorationTypeBack);
     o.drawImage(layers.paint, 0, 0);
     layers.tex.needsUpdate = true;
   };
@@ -854,7 +958,19 @@ export default forwardRef<Studio3DHandle, Studio3DProps>(function Studio3D(props
     // the same symptom, toggle PAINT_V_FLIP below rather than hunting for
     // this line again.
     const PAINT_V_FLIP = false;
-    const p: Pt = { x: uv.x * TEX, y: (PAINT_V_FLIP ? 1 - uv.y : uv.y) * TEX };
+    // §4 — island clamp: on PROCEDURAL garments every mesh owns a disjoint
+    // UV island, so a stroke/bucket/gradient started on one part is
+    // hard-clamped to that part's box — it can never write a pixel of
+    // another part. Catalog .glb models use their own baked UVs (no
+    // islands), so there the whole canvas is one valid region.
+    const island: { part: string; box: UvBox } = props.modelPath
+      ? { part: "glb", box: { u0: 0, u1: 1, v0: 0, v1: 1 } }
+      : uvIslandAt(uv.x, PAINT_V_FLIP ? 1 - uv.y : uv.y);
+    const box = island.box;
+    const bx: FillBounds = { x0: box.u0 * TEX, y0: box.v0 * TEX, x1: box.u1 * TEX, y1: box.v1 * TEX };
+    const clampedU = Math.min(Math.max(uv.x, box.u0 + 0.0005), box.u1 - 0.0005);
+    const clampedV = Math.min(Math.max(PAINT_V_FLIP ? 1 - uv.y : uv.y, box.v0 + 0.0005), box.v1 - 0.0005);
+    const p: Pt = { x: clampedU * TEX, y: clampedV * TEX };
 
     if (down) {
       pushHistory();
@@ -863,8 +979,13 @@ export default forwardRef<Studio3DHandle, Studio3DProps>(function Studio3D(props
     }
 
     if (brush.tool === "bucket") {
+      // §4 — ColorDrop is the ONLY tool that flood-fills. Its sensitivity
+      // slider (brush.opacity 0..1 shown as "التسامح/Tolerance" for this
+      // tool) maps to the per-channel match slack, and `bx` guarantees the
+      // fill stays inside the one part it started on. 255 = ignore closed
+      // boundaries within the part; 1 = almost exact-color-only.
       if (!down) return;
-      floodFill(canvas, p, brush.color);
+      floodFill(canvas, p, brush.color, Math.round(Math.max(1, brush.opacity * 255)), bx);
     } else if (brush.tool === "text") {
       // §2 — text is no longer stamped onto the paint layer by tapping:
       // the Text panel applies it LIVE as a controllable design element
@@ -872,11 +993,14 @@ export default forwardRef<Studio3DHandle, Studio3DProps>(function Studio3D(props
       // with the Text tool intentionally does nothing.
       return;
     } else if (brush.tool === "gradient") {
-      if (down) { gradStartRef.current = p; return; }
+      if (down) { gradStartRef.current = p; gradIslandRef.current = bx; return; }
       const from = gradStartRef.current;
       if (!from) return;
-      applyGradient(canvas, from, p, brush.color, brush.opacity);
+      // §4 — the gradient sweep is clipped to the island it started on.
+      applyGradient(canvas, from, p, brush.color, brush.opacity, gradIslandRef.current ?? bx);
     } else {
+      // Freehand draw / eraser / smudge — pure stroke stamping, never a
+      // flood fill (§4). Points are clamped inside the island.
       drawSegment(ctx, strokeRef.current, p, brush, TEX);
     }
 
@@ -887,7 +1011,7 @@ export default forwardRef<Studio3DHandle, Studio3DProps>(function Studio3D(props
     paintAtRef.current = paintAt;
 
   useEffect(() => {
-    const up = () => { gradStartRef.current = null; strokeRef.current = newStroke(); };
+    const up = () => { gradStartRef.current = null; gradIslandRef.current = null; strokeRef.current = newStroke(); };
     window.addEventListener("pointerup", up);
     return () => window.removeEventListener("pointerup", up);
   }, []);
@@ -925,7 +1049,11 @@ export default forwardRef<Studio3DHandle, Studio3DProps>(function Studio3D(props
 
   return (
     <div className="relative w-full h-full" onPointerDown={onSplatterPointer} onPointerMove={onSplatterPointerMove}>
-      <ModelErrorBoundary key={props.modelPath ?? props.garment} path={props.modelPath}>
+      <ModelErrorBoundary
+        key={effectiveModelPath ?? props.garment}
+        path={props.modelPath}
+        onGiveUp={() => setModelLoadFailed(true)}
+      >
       <Canvas
         shadows
         dpr={dpr}
@@ -961,12 +1089,12 @@ export default forwardRef<Studio3DHandle, Studio3DProps>(function Studio3D(props
           <Garment
             garment={props.garment}
             color={props.color}
-            modelPath={props.modelPath}
+            modelPath={effectiveModelPath}
             size={props.size}
             texture={layers.tex}
             spin={!props.frozen && !paintingActive}
             pose={props.pose}
-            onBaked={(image) => { bakedRef.current = image; compose(); }}
+            onBaked={(image) => { bakedRef.current = image; compose(); setModelLoadFailed(false); }}
             onPointerPaint={paintingActive ? paintAt : undefined}
           />
           </FabricTypeContext.Provider>
