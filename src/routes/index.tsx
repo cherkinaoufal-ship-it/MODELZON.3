@@ -6,7 +6,7 @@ import { uploadAvatar } from "@/lib/avatar";
 import { requestProduction } from "@/lib/production";
 import type { ProductionMeasurements } from "@/lib/production";
 import ProductionRequestDialog from "@/components/modelzon/ProductionRequestDialog";
-import { listFriends, addFriend, removeFriend, FRIEND_LIMIT } from "@/lib/friends.functions";
+import { listFriends, removeFriend, FRIEND_LIMIT } from "@/lib/friends.functions";
 import {
   sendFriendRequest, respondFriendRequest, listIncomingFriendRequests, getOutgoingFriendRequest,
   type FriendRequestSummary,
@@ -19,12 +19,12 @@ import { convertUsdCentsToCurrency, formatMoney } from "@/lib/currency";
 import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import {
-  Shirt, HardHat, Crown, Trophy, Lock, ShoppingBag,
+  Shirt, HardHat, Crown, Trophy, Lock, ShoppingBag, Play,
   Settings, MessageSquare, Sparkles, X, Bot, User,
   Palette as PaletteIcon, Swords, Store, Brush, Clapperboard,
   Snowflake, Sun, CheckCircle2, Circle, Camera, Factory, Users,
   Image as ImageIcon, LayoutGrid, RotateCw, PersonStanding, Footprints, Wind,
-  CreditCard, Grid3x3, SlidersHorizontal, Shield, Sticker, Upload, Plus,
+  Grid3x3, SlidersHorizontal, Shield, Sticker, Upload, Plus,
   Printer, Hourglass, Check, UserPlus, Undo2, Redo2,
 } from "lucide-react";
 import ChatPanel from "@/components/modelzon/ChatPanel";
@@ -120,7 +120,7 @@ import AIGraphicAssistant from "@/components/modelzon/AIGraphicAssistant";
 import BattleRoom from "@/components/modelzon/BattleRoom";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { isNativeAndroid, initRevenueCat, purchaseTierNative, openNativeSubscriptionManagement } from "@/lib/revenuecat";
-import { createConnectOnboardingLink, syncConnectStatus } from "@/lib/stripe-connect.functions";
+import { syncConnectStatus } from "@/lib/stripe-connect.functions";
 import { createSubscriptionCheckout, confirmSubscriptionCheckout, openBillingPortal, TIER_PRICES_CENTS, type SubTier } from "@/lib/subscription.functions";
 import { useArenaPresence } from "@/lib/presence";
 import { toast } from "sonner";
@@ -381,10 +381,29 @@ function Modelzon() {
 
   // ---- Friends / Clan (Pro+ perk) ----
   const [friends, setFriends] = useState<{ id: string; username: string; level: number; avatar_url: string | null }[]>([]);
-  const [friendIdInput, setFriendIdInput] = useState("");
-  const [addingFriend, setAddingFriend] = useState(false);
+  // §9 — instant search by name / @handle instead of typing a raw Player ID
+  const [friendQuery, setFriendQuery] = useState("");
+  const [friendResults, setFriendResults] = useState<{ id: string; username: string; level: number; avatar_url: string | null }[]>([]);
+  const [friendSearching, setFriendSearching] = useState(false);
+
+  useEffect(() => {
+    const q = friendQuery.trim().replace(/^@+/, "");
+    if (!user || q.length < 2) { setFriendResults([]); setFriendSearching(false); return; }
+    setFriendSearching(true);
+    const timer = setTimeout(async () => {
+      const { data } = await supabase
+        .from("profiles")
+        .select("id, username, level, avatar_url")
+        .ilike("username", `%${q}%`)
+        .neq("id", user.id)
+        .order("level", { ascending: false })
+        .limit(8);
+      setFriendResults((data ?? []) as { id: string; username: string; level: number; avatar_url: string | null }[]);
+      setFriendSearching(false);
+    }, 250);
+    return () => clearTimeout(timer);
+  }, [friendQuery, user?.id]); // eslint-disable-line react-hooks/exhaustive-deps
   const listFriendsFn = useServerFn(listFriends);
-  const addFriendFn = useServerFn(addFriend);
   const removeFriendFn = useServerFn(removeFriend);
   // "+" add-friend button state on the inspection card (§9b). Declared
   // here — before the handlers — because both the friends block and the
@@ -415,21 +434,6 @@ function Modelzon() {
   }, [user, respondRequestFn, refreshFriends]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => { if (user && tab === "profile") void refreshFriends(); }, [user?.id, tab]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  const handleAddFriend = useCallback(async () => {
-    if (!user || !friendIdInput.trim()) return;
-    setAddingFriend(true);
-    try {
-      await addFriendFn({ data: { userId: user.id, friendPlayerId: friendIdInput.trim() } });
-      setFriendIdInput("");
-      toast.success(t("Friend added 🎉", "تمت إضافة الصديق 🎉"));
-      void refreshFriends();
-    } catch (e: any) {
-      toast.error(e?.message ?? t("Couldn't add friend", "تعذّر إضافة الصديق"));
-    } finally {
-      setAddingFriend(false);
-    }
-  }, [user, friendIdInput, addFriendFn, refreshFriends]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleSendFriendRequest = useCallback(async (targetId: string) => {
     if (!user || friendReqState === "sending" || friendReqState === "pending" || friendReqState === "friends") return;
@@ -693,36 +697,8 @@ function Modelzon() {
     }
   }, [profile?.stripe_customer_id, lang]);
 
-  const [connecting, setConnecting] = useState(false);
-  const handleConnectPayouts = useCallback(async () => {
-    if (!user?.email) return;
-    setConnecting(true);
-    try {
-      const link = await createConnectOnboardingLink({ data: { userId: user.id, email: user.email, origin: window.location.origin } });
-      window.location.href = link.url;
-    } catch {
-      setConnecting(false);
-      toast.error(lang === "ar" ? "تعذّر فتح صفحة ربط حساب الدفع" : "Couldn't open payout account setup");
-    }
-  }, [user, lang]);
-
-  // If we just came back from Stripe Connect onboarding, re-check the real
-  // status with Stripe (never trust the redirect alone).
-  useEffect(() => {
-    const params = new URLSearchParams(window.location.search);
-    if (params.get("connect") === "return" && user) {
-      syncConnectStatus({ data: { userId: user.id } })
-        .then((status) => {
-          if (status.chargesEnabled) {
-            toast.success(lang === "ar" ? "تم ربط حساب استلام الأرباح 🎉" : "Payout account connected 🎉");
-            refreshProfile();
-          } else {
-            toast(lang === "ar" ? "الحساب مربوط بس لسا فيه خطوات ناقصة بستريب" : "Account linked but Stripe still needs more info from you");
-          }
-        })
-        .catch(() => {});
-    }
-  }, [user, lang, refreshProfile]);
+  // §9 — Stripe payout onboarding UI is deleted from the profile; the
+  // connect=return sync below is all that remains (harmless if never used).
 
   // Handle the redirect back from Stripe (?checkout=... for one-time orders,
   // ?sub=... for subscription checkouts).
@@ -773,11 +749,24 @@ function Modelzon() {
 
 
 
+  // §9 — the current user's reels live in the SAME saved-content grid as
+  // their designs (small type badge distinguishes them), instead of a
+  // separate reels place on the profile.
+  const [myShorts, setMyShorts] = useState<{ id: string; video_url: string; caption: string; likes_count: number; created_at: string }[]>([]);
+  const [openShort, setOpenShort] = useState<{ id: string; video_url: string; caption: string } | null>(null);
+
   const refreshDesigns = useCallback(async () => {
     if (!user) return;
     setDesignsLoading(true);
     const rows = await listMyDesigns(user.id);
     setMyDesigns(rows);
+    const { data: shorts } = await supabase
+      .from("shorts")
+      .select("id, video_url, caption, likes_count, created_at")
+      .eq("user_id", user.id)
+      .order("created_at", { ascending: false })
+      .limit(30);
+    setMyShorts(shorts ?? []);
     setDesignsLoading(false);
   }, [user]);
 
@@ -1987,19 +1976,8 @@ function Modelzon() {
                   </div>
                 </div>
 
-                <div className="grid grid-cols-4 gap-2">
-                  {[
-                    { label: t("Battles Judged", "معارك محكومة"), value: missionStats?.battlesJudged ?? 0 },
-                    { label: t("Designs Created", "تصاميم أُنشئت"), value: myDesigns.length },
-                    { label: t("Scores 8.0+", "تقييم 8.0+"), value: missionStats?.highScoreEntries ?? 0, star: true },
-                    { label: t("ZONE Credits", "أرصدة ZONE"), value: coins },
-                  ].map((s) => (
-                    <div key={s.label} className="rounded-xl p-2.5 bg-white/[0.03] border border-white/10 text-center">
-                      <div className="text-lg font-black text-cyan-200">{s.star && "★ "}{s.value}</div>
-                      <div className="text-[9px] text-white/40 uppercase leading-tight mt-0.5">{s.label}</div>
-                    </div>
-                  ))}
-                </div>
+                {/* §9 — the 4-stat row (battles judged / designs created /
+                    scores 8.0+ / ZONE credits) above the icon bar is deleted. */}
 
                 {/* TikTok-style icon rail — one tap per section instead of
                     one long stacked scroll of cards. */}
@@ -2007,7 +1985,6 @@ function Modelzon() {
                   {([
                     ["designs", t("Designs", "التصاميم"), Grid3x3],
                     ["plan", t("Plan", "الاشتراك"), Crown],
-                    ["payouts", t("Payouts", "الأرباح"), CreditCard],
                     ["friends", t("Friends", "الأصدقاء"), Users],
                     ["settings", t("Settings", "الإعدادات"), SlidersHorizontal],
                   ] as const).map(([id, label, Icon]) => {
@@ -2048,36 +2025,69 @@ function Modelzon() {
                           tile to open the detail sheet with all the actions
                           (selling, deleting) instead of cramming tiny
                           controls into each thumbnail. */}
+                      {/* §9 — one merged grid: designs + reels, each with a
+                          small type badge; reels open the inline player. */}
                       <div className="grid grid-cols-3 gap-0.5 sm:gap-1 rounded-lg overflow-hidden">
-                        {myDesigns.map((d) => (
-                          <button
-                            key={d.id}
-                            onClick={() => setOpenDesign(d)}
-                            className="relative aspect-square block group"
-                            style={{ backgroundColor: d.color }}
-                          >
-                            {d.decal_url ? (
-                              <img src={d.decal_url} alt={d.title} className="w-full h-full object-cover" />
-                            ) : (
-                              <div className="w-full h-full flex items-center justify-center">
-                                <Shirt size={28} className="text-white/20" />
+                        {[
+                          ...myDesigns.map((d) => ({ key: `d-${d.id}`, at: d.created_at, node: (
+                            <button
+                              key={`d-${d.id}`}
+                              onClick={() => setOpenDesign(d)}
+                              className="relative aspect-square block group"
+                              style={{ backgroundColor: d.color }}
+                            >
+                              {d.decal_url ? (
+                                <img src={d.decal_url} alt={d.title} className="w-full h-full object-cover" />
+                              ) : (
+                                <div className="w-full h-full flex items-center justify-center">
+                                  <Shirt size={28} className="text-white/20" />
+                                </div>
+                              )}
+                              {d.decal_url_back && (
+                                <span className="absolute top-1 left-1 w-4 h-4 rounded-full bg-black/60 flex items-center justify-center">
+                                  <span className="w-1.5 h-1.5 rounded-full bg-cyan-300" />
+                                </span>
+                              )}
+                              {d.for_sale && (
+                                <span className="absolute top-1 right-1 px-1 py-0.5 rounded bg-emerald-500/90 text-black text-[8px] font-black">
+                                  ${(d.price_cents! / 100).toFixed(0)}
+                                </span>
+                              )}
+                              <span className="absolute bottom-1 left-1 px-1 py-0.5 rounded bg-black/70 text-cyan-200 text-[8px] font-black">
+                                {t("Design", "تصميم")}
+                              </span>
+                              <div className="absolute inset-0 bg-black/0 group-hover:bg-black/30 transition flex items-center justify-center opacity-0 group-hover:opacity-100">
+                                <span className="text-[10px] font-bold text-white">{t("View", "عرض")}</span>
                               </div>
-                            )}
-                            {d.decal_url_back && (
+                            </button>
+                          )})),
+                          ...myShorts.map((v) => ({ key: `r-${v.id}`, at: v.created_at, node: (
+                            <button
+                              key={`r-${v.id}`}
+                              onClick={() => setOpenShort(v)}
+                              className="relative aspect-square block group bg-black"
+                            >
+                              <video
+                                src={`${v.video_url}#t=0.1`}
+                                muted
+                                playsInline
+                                preload="metadata"
+                                className="w-full h-full object-cover pointer-events-none"
+                              />
                               <span className="absolute top-1 left-1 w-4 h-4 rounded-full bg-black/60 flex items-center justify-center">
-                                <span className="w-1.5 h-1.5 rounded-full bg-cyan-300" />
+                                <Play size={9} className="text-fuchsia-300 fill-fuchsia-300" />
                               </span>
-                            )}
-                            {d.for_sale && (
-                              <span className="absolute top-1 right-1 px-1 py-0.5 rounded bg-emerald-500/90 text-black text-[8px] font-black">
-                                ${(d.price_cents! / 100).toFixed(0)}
+                              <span className="absolute bottom-1 left-1 px-1 py-0.5 rounded bg-black/70 text-fuchsia-200 text-[8px] font-black">
+                                {t("Reel", "ريل")}
                               </span>
-                            )}
-                            <div className="absolute inset-0 bg-black/0 group-hover:bg-black/30 transition flex items-center justify-center opacity-0 group-hover:opacity-100">
-                              <span className="text-[10px] font-bold text-white">{t("View", "عرض")}</span>
-                            </div>
-                          </button>
-                        ))}
+                              <span className="absolute bottom-1 right-1 text-[8px] font-bold text-white/80 flex items-center gap-0.5">
+                                ♥ {v.likes_count}
+                              </span>
+                            </button>
+                          )})),
+                        ]
+                          .sort((a, b) => new Date(b.at).getTime() - new Date(a.at).getTime())
+                          .map((tile) => tile.node)}
                       </div>
 
                       {/* Detail sheet — like tapping a post: full preview + actions */}
@@ -2142,6 +2152,27 @@ function Modelzon() {
                                 <Trash2 size={12} /> {t("Delete design", "حذف التصميم")}
                               </button>
                             </>
+                          )}
+                        </DialogContent>
+                      </Dialog>
+
+                      {/* §9 — inline reel player (merged saved-content grid) */}
+                      <Dialog open={Boolean(openShort)} onOpenChange={(o) => !o && setOpenShort(null)}>
+                        <DialogContent className="border-fuchsia-400/30 bg-black/95 backdrop-blur-md sm:max-w-xs" dir={lang === "ar" ? "rtl" : "ltr"}>
+                          {openShort && (
+                            <div className="space-y-2">
+                              <video
+                                key={openShort.id}
+                                src={openShort.video_url}
+                                controls
+                                autoPlay
+                                playsInline
+                                className="w-full rounded-xl max-h-[65vh] bg-black"
+                              />
+                              {openShort.caption && (
+                                <p className="text-xs text-white/70 text-center">{openShort.caption}</p>
+                              )}
+                            </div>
                           )}
                         </DialogContent>
                       </Dialog>
@@ -2267,38 +2298,14 @@ function Modelzon() {
                       )}
                     </DialogContent>
                   </Dialog>
+
                 </div>
 
                 )}
 
-                {profileTab === "payouts" && (
-                <div className="rounded-2xl p-4 bg-white/[0.03] border border-white/10">
-                  <div className="flex items-center gap-2 mb-2">
-                    <Trophy size={14} className="text-emerald-300" />
-                    <span className="text-sm font-black">{t("Seller payouts", "استلام أرباح البيع")}</span>
-                  </div>
-                  <p className="text-[10px] text-white/50 mb-3">
-                    {t(
-                      "Connect a Stripe payout account to receive your share of marketplace sales directly. Elite subscribers keep 100% — everyone else keeps 85% (15% platform fee).",
-                      "اربط حساب استلام أرباح على Stripe عشان تستلم حصتك من مبيعات السوق مباشرة. مشتركي Elite يحصلون 100%، والباقي 85% (عمولة المنصة 15%).",
-                    )}
-                  </p>
-                  {profile?.stripe_connect_charges_enabled ? (
-                    <span className="block text-center text-[10px] font-bold text-emerald-300">
-                      ✓ {t("Payout account connected", "حساب الاستلام مربوط")}
-                    </span>
-                  ) : (
-                    <button
-                      onClick={handleConnectPayouts}
-                      disabled={connecting}
-                      className="w-full py-1.5 rounded-lg bg-emerald-500/20 border border-emerald-400/40 text-emerald-200 text-[11px] font-bold disabled:opacity-40"
-                    >
-                      {connecting ? "..." : profile?.stripe_connect_account_id ? t("Finish payout setup", "أكمل إعداد الاستلام") : t("Connect payout account", "اربط حساب الاستلام")}
-                    </button>
-                  )}
-                </div>
-
-                )}
+                {/* §9 — the payouts section (Card icon + "استلام أرباح
+                    الـZONE / اربط حساب الاستلام" Stripe card) is deleted; the
+                    Friends tab takes its place in the icon rail. */}
 
                 {profileTab === "friends" && (
                 <div className="rounded-2xl p-4 bg-white/[0.03] border border-white/10">
@@ -2349,21 +2356,53 @@ function Modelzon() {
                     </p>
                   ) : (
                     <>
-                      <div className="flex gap-1.5 mb-2">
+                      {/* §9 — instant search by name / @handle */}
+                      <div className="relative mb-2">
                         <input
-                          value={friendIdInput}
-                          onChange={(e) => setFriendIdInput(e.target.value)}
-                          placeholder={t("Enter their Player ID (MZ-XXXXXX)", "أدخل معرّف اللاعب (MZ-XXXXXX)")}
-                          className="flex-1 rounded-lg bg-black/40 border border-white/10 text-xs px-2.5 py-1.5 text-white outline-none focus:border-fuchsia-400/50"
+                          value={friendQuery}
+                          onChange={(e) => setFriendQuery(e.target.value)}
+                          placeholder={t("Search by name or @handle…", "ابحث بالاسم أو @المعرّف…")}
+                          className="w-full rounded-lg bg-black/40 border border-white/10 text-xs px-2.5 py-1.5 text-white outline-none focus:border-fuchsia-400/50"
                         />
-                        <button
-                          onClick={handleAddFriend}
-                          disabled={addingFriend || !friendIdInput.trim()}
-                          className="px-3 rounded-lg bg-fuchsia-500/20 border border-fuchsia-400/40 text-fuchsia-100 text-xs font-bold disabled:opacity-40"
-                        >
-                          {addingFriend ? "…" : t("Add", "إضافة")}
-                        </button>
+                        {friendSearching && (
+                          <Loader2 size={13} className="animate-spin absolute left-2.5 top-2 text-white/40" />
+                        )}
                       </div>
+                      {friendQuery.trim().length >= 2 && (
+                        <div className="mb-2 rounded-xl border border-white/10 bg-black/50 divide-y divide-white/5">
+                          {friendResults.length === 0 ? (
+                            <p className="text-[11px] text-white/30 text-center py-2">
+                              {t("No players found", "لا يوجد لاعبون بهذا الاسم")}
+                            </p>
+                          ) : (
+                            friendResults.map((r) => {
+                              const already = friends.some((f) => f.id === r.id);
+                              return (
+                                <div key={r.id} className="flex items-center gap-2 px-2.5 py-1.5">
+                                  <div className="w-7 h-7 rounded-full bg-gradient-to-br from-cyan-400 to-fuchsia-500 flex items-center justify-center text-[10px] font-black text-black overflow-hidden shrink-0">
+                                    {r.avatar_url ? <img src={r.avatar_url} className="w-full h-full object-cover" /> : r.username[0]?.toUpperCase()}
+                                  </div>
+                                  <div className="flex-1 min-w-0">
+                                    <div className="text-xs font-bold truncate">@{r.username}</div>
+                                    <div className="text-[9px] text-white/35">LVL {r.level}</div>
+                                  </div>
+                                  <button
+                                    onClick={() => { if (!already) handleSendFriendRequest(r.id); }}
+                                    disabled={already || friendReqState === "sending" || friendReqState === "pending"}
+                                    className={`px-2.5 py-1 rounded-lg text-[10px] font-black border transition ${
+                                      already
+                                        ? "bg-emerald-500/15 border-emerald-400/40 text-emerald-200"
+                                        : "bg-fuchsia-500/20 border-fuchsia-400/40 text-fuchsia-100 hover:bg-fuchsia-500/30 disabled:opacity-40"
+                                    }`}
+                                  >
+                                    {already ? t("Friends ✓", "أصدقاء ✓") : t("Request", "طلب")}
+                                  </button>
+                                </div>
+                              );
+                            })
+                          )}
+                        </div>
+                      )}
                       {friends.length === 0 ? (
                         <p className="text-[11px] text-white/30 text-center py-2">{t("No friends yet — add some by their Player ID.", "ما فيه أصدقاء بعد — أضف بمعرّف اللاعب.")}</p>
                       ) : (
