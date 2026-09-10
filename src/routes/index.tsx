@@ -1614,16 +1614,11 @@ function Modelzon() {
 
                 <CompetitorsRoom lang={lang} online={onlinePlayers} myUserId={user?.id} onOpenStudio={() => setTab("studio")} />
 
-                <div className="rounded-xl p-3 bg-white/[0.02] border border-white/10 text-[11px] text-white/40 text-center">
-                  {t("Prefer solo practice? Judge yourself against the community topic below, no matchmaking needed.", "تفضل التمرين الفردي؟ قيّم نفسك ضد موضوع المجتمع تحت، بدون مطابقة لاعبين.")}
-                </div>
                 <ArenaBoard
                   lang={lang}
                   garment={garment}
-                  topic={topic}
                   username={profile?.username ?? user?.email?.split("@")[0] ?? "Player"}
                   avatarUrl={avatarUrl}
-                  onTopic={setTopic}
                 />
 
               </div>

@@ -69,6 +69,18 @@ export const joinBattleRoom = createServerFn({ method: "POST" })
       .maybeSingle();
     if (existingMembership) return { roomId: existingMembership.room_id as string };
 
+    // §8 — two fully independent matchmaking channels derived from the
+    // caller's OWN profile flag (never from client input): a player with
+    // ai_challenge_enabled can only ever land in an 'ai' room, everyone
+    // else only in a 'classic' room. The .eq("channel") filters below make
+    // cross-channel matching structurally impossible.
+    const { data: profileRow } = await admin
+      .from("profiles")
+      .select("ai_challenge_enabled")
+      .eq("id", data.userId)
+      .maybeSingle();
+    const channel = profileRow?.ai_challenge_enabled ? "ai" : "classic";
+
     // §9 — rank-based matchmaking: only join a waiting room whose current
     // members are in the SAME rank tier as this player. Otherwise open a
     // fresh room for their tier.
@@ -77,6 +89,7 @@ export const joinBattleRoom = createServerFn({ method: "POST" })
       .from("battle_rooms")
       .select("id, battle_room_members(level)")
       .eq("status", "waiting")
+      .eq("channel", channel)
       .eq("topic", data.topic)
       .eq("garment", data.garment)
       .limit(20);
@@ -93,7 +106,7 @@ export const joinBattleRoom = createServerFn({ method: "POST" })
     if (!roomId) {
       const { data: created, error: createErr } = await admin
         .from("battle_rooms")
-        .insert({ topic: data.topic, garment: data.garment, max_players: MAX_PLAYERS })
+        .insert({ topic: data.topic, garment: data.garment, max_players: MAX_PLAYERS, channel })
         .select("id")
         .single();
       if (createErr) throw new Error(createErr.message);

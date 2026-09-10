@@ -1,59 +1,12 @@
 import { supabase } from "./supabase";
 
-export type ArenaTopic = {
-  id: string;
-  text: string;
-  author_id: string;
-  votes_count: number;
-  votedByMe: boolean;
-  author_username?: string;
-};
-
-export async function listTopics(userId: string): Promise<ArenaTopic[]> {
-  const [{ data: topics, error }, { data: myVotes }] = await Promise.all([
-    supabase
-      .from("arena_topics")
-      .select("*, profiles!arena_topics_author_id_fkey(username)")
-      .order("votes_count", { ascending: false })
-      .limit(30),
-    supabase.from("arena_topic_votes").select("topic_id").eq("user_id", userId),
-  ]);
-  if (error) {
-    console.error("Failed to load topics:", error.message);
-    return [];
-  }
-  const votedSet = new Set((myVotes ?? []).map((v) => v.topic_id));
-  return (topics ?? []).map((row: any) => ({
-    id: row.id,
-    text: row.text,
-    author_id: row.author_id,
-    votes_count: row.votes_count,
-    votedByMe: votedSet.has(row.id),
-    author_username: row.profiles?.username,
-  }));
-}
-
-export async function addTopic(text: string, authorId: string): Promise<ArenaTopic | null> {
-  const { data, error } = await supabase
-    .from("arena_topics")
-    .insert({ text, author_id: authorId })
-    .select()
-    .single();
-  if (error) {
-    console.error("Failed to add topic:", error.message);
-    return null;
-  }
-  return { ...data, votedByMe: false } as ArenaTopic;
-}
-
-export async function voteTopic(topicId: string, userId: string): Promise<boolean> {
-  const { error } = await supabase.from("arena_topic_votes").insert({ topic_id: topicId, user_id: userId });
-  if (error) {
-    if (error.code !== "23505") console.error("Failed to vote:", error.message); // 23505 = already voted, ignore quietly
-    return false;
-  }
-  return true;
-}
+/**
+ * §8 — the community-topics functions (listTopics / addTopic / voteTopic /
+ * fetchTopicLeaderboard) are deleted along with their UI: topic voting and
+ * "اقترح موضوعاً" are gone, and migration 021 drops the arena_topic_votes
+ * table + bump_topic_votes RPC. The arena_topics TABLE itself remains —
+ * battle rooms reference it as the topic registry (see joinBattleRoom).
+ */
 
 export type ArenaEntry = {
   id: string;
