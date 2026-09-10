@@ -1200,7 +1200,6 @@ function Modelzon() {
                   <ProToolbar
                     brush={brush}
                     setBrush={(patch) => setBrush((b) => ({ ...b, ...patch }))}
-                    palette={PALETTE}
                     frozen={frozen}
                     setFrozen={setFrozen}
                     onUndo={() => setUndoSignal((n) => n + 1)}
@@ -1345,7 +1344,6 @@ function Modelzon() {
                     onActivePanel={setDecalSide}
                     onOpenParts={() => setPartsSheetOpen(true)}
                     brushColor={brush.color}
-                    onBrushColor={(c) => setBrush((b) => ({ ...b, color: c }))}
                     brushSize={brush.size}
                     onBrushSize={(n) => setBrush((b) => ({ ...b, size: n }))}
                     onPaint={handleMockupPaint}
@@ -1513,13 +1511,6 @@ function Modelzon() {
                     <PaletteIcon size={11} /> {t("Base color", "لون القاعدة")}
                   </div>
                   <ColorPickerHSV color={color} onChange={changeColor} ar={lang === "ar"} />
-                  <div className="flex flex-wrap gap-1.5">
-                    {PALETTE.map((c) => (
-                      <button key={c} onClick={() => changeColor(c)}
-                        className={`w-6 h-6 rounded-md border-2 ${color.toLowerCase() === c.toLowerCase() ? "border-white" : "border-white/20"}`}
-                        style={{ background: c }} />
-                    ))}
-                  </div>
                 </div>
 
                 </>

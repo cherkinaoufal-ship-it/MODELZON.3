@@ -16,7 +16,6 @@ import {
 interface Props {
   brush: BrushSettings;
   setBrush: (patch: Partial<BrushSettings>) => void;
-  palette: string[];
   frozen: boolean;
   setFrozen: (v: boolean) => void;
   /** Quick stroke-undo stays one tap away while painting. Upload & clear
@@ -45,7 +44,7 @@ const TOOLS: { id: ToolId; icon: any; en: string; ar: string }[] = [
 type BrushMemory = Partial<Record<BrushId, { size: number; opacity: number; spacing: number }>>;
 
 export default function ProToolbar({
-  brush, setBrush, palette, frozen, setFrozen, onUndo, lang,
+  brush, setBrush, frozen, setFrozen, onUndo, lang,
 }: Props) {
   const t = (en: string, ar: string) => (lang === "ar" ? ar : en);
   const [openGroup, setOpenGroup] = useState<string>("core");
@@ -70,13 +69,30 @@ export default function ProToolbar({
   // their own dedicated controls below (§2 / §5).
   const sliders = (() => {
     if (brush.tool === "text" || brush.tool === "smudge") return [];
+    // §4 — for the bucket (ColorDrop) the sensitivity slider IS the flood
+    // tolerance: it controls how far the fill spreads before stopping at a
+    // closed paint boundary (mapped to a 1..255 per-channel slack in
+    // Studio3D's paintAt). The label changes so it reads as what it does.
+    if (brush.tool === "bucket") {
+      return [
+        {
+          label: t("Tolerance", "التسامح"),
+          value: brush.opacity,
+          min: 0.02,
+          max: 1,
+          step: 0.02,
+          key: "opacity" as const,
+          display: `${Math.round(brush.opacity * 100)}%`,
+        },
+      ];
+    }
     const all = [
       { label: t("Size", "الحجم"), value: brush.size, min: 2, max: 90, step: 1, key: "size" as const, display: `${brush.size}px` },
       { label: t("Opacity", "الشفافية"), value: brush.opacity, min: 0.05, max: 1, step: 0.05, key: "opacity" as const, display: `${Math.round(brush.opacity * 100)}%` },
       { label: t("Spacing", "التباعد"), value: brush.spacing, min: 0.05, max: 1, step: 0.05, key: "spacing" as const, display: `${Math.round(brush.spacing * 100)}%` },
     ];
     if (brush.tool === "eraser") return all.slice(0, 1);
-    if (brush.tool === "bucket" || brush.tool === "gradient") return all.slice(1, 2);
+    if (brush.tool === "gradient") return all.slice(1, 2);
     return all;
   })();
 
@@ -350,20 +366,13 @@ export default function ProToolbar({
         </div>
       )}
 
-      {/* Color */}
+      {/* Color — §3: the app's ONE unified picker only. The duplicated
+          ready-color palette row, gradient picker and secondary-color row
+          that used to sit under the brush-size slider are gone; no tool
+          carries its own copy of the color UI anymore. */}
       <div className="p-3 border-b border-white/10 space-y-2">
         <div className="text-[10px] uppercase tracking-widest text-white/50">{t("Paint color", "لون الطلاء")}</div>
         <ColorPickerHSV color={brush.color} onChange={(hex) => setBrush({ color: hex })} ar={lang === "ar"} compact />
-        <div className="flex flex-wrap gap-1.5">
-          {palette.map((c) => (
-            <button
-              key={c}
-              onClick={() => setBrush({ color: c })}
-              className={`w-6 h-6 rounded-md border-2 ${brush.color.toLowerCase() === c.toLowerCase() ? "border-white" : "border-white/20"}`}
-              style={{ background: c }}
-            />
-          ))}
-        </div>
       </div>
 
     </div>

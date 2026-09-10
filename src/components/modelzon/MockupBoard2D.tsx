@@ -624,7 +624,6 @@ interface Props {
   onActivePanel: (p: PanelId) => void;
   onOpenParts: () => void;
   brushColor: string;
-  onBrushColor: (c: string) => void;
   brushSize: number;
   onBrushSize: (n: number) => void;
   onPaint: (panel: PanelId, dx: number, dy: number, down: boolean) => void;
@@ -634,7 +633,7 @@ interface Props {
 
 export default function MockupBoard2D({
   garment, color, ar, elements, onPatchElement, onRemoveElement, onReplaceElement, onAddElement, onAddImage,
-  activePanel, onActivePanel, onOpenParts, brushColor, onBrushColor, brushSize, onBrushSize, onPaint, onPaintUndo, onPaintClear,
+  activePanel, onActivePanel, onOpenParts, brushColor, brushSize, onBrushSize, onPaint, onPaintUndo, onPaintClear,
 }: Props) {
   // NOTE: argument order here is (arabic, english) — Arabic-first, matching
   // every call site written for the Arabic-first UI.
@@ -841,12 +840,9 @@ export default function MockupBoard2D({
                     <input type="range" min={4} max={90} value={brushSize} onChange={(e) => onBrushSize(Number(e.target.value))} className="flex-1 accent-cyan-400" />
                     <span className="text-[10px] font-mono text-cyan-300 w-8">{brushSize}px</span>
                   </div>
-                  <div className="flex flex-wrap gap-1.5">
-                    {["#ffffff", "#22d3ee", "#a855f7", "#ec4899", "#f59e0b", "#10b981", "#f43f5e", "#0f172a"].map((c) => (
-                      <button key={c} onClick={() => onBrushColor(c)} title={c}
-                        className="w-6 h-6 rounded-md border-2 border-white/25 hover:border-white" style={{ background: c }} />
-                    ))}
-                  </div>
+                  {/* §3 — the duplicated ready-color row under the size slider
+                      is gone; the unified color picker in the Paint panel is
+                      the single place a brush color is chosen. */}
                   <div className="flex gap-2">
                     <button onClick={onPaintUndo} className="flex-1 py-2 rounded-lg bg-white/5 border border-white/10 text-white/70 text-[10px] font-bold">
                       {t("تراجع", "Undo")}
