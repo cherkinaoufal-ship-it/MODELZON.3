@@ -48,64 +48,133 @@ const thread = (d, color = "#e8e2d4", sw = 3.2) => `
   <path d="${d}" fill="none" stroke="#ffffff" stroke-opacity="0.45" stroke-width="${Math.max(1, sw / 3)}" stroke-linecap="round" stroke-linejoin="round" transform="translate(0,-0.8)"/>`;
 
 /* ============================== 7 brushes ============================== */
-// tool illustration + a sample of the stroke it makes
+// §7a — near-realistic tool renders (reference: dark matte bodies, metallic
+// nibs, soft floor shadow) + a small sample of the stroke each one makes.
 
 const BRUSHES = {
   pen: `
-    <line x1="8" y1="40" x2="24" y2="24" stroke="#1f2937" stroke-width="2.4" stroke-linecap="round"/>
-    <g transform="rotate(45 30 18)">
-      <rect x="26" y="4" width="8" height="20" rx="2" fill="#0ea5e9" stroke="#0b3954" stroke-width="1.4"/>
-      <path d="M26 24 h8 l-4 8 z" fill="#dbeafe" stroke="#0b3954" stroke-width="1.2"/>
-    </g>
-    <circle cx="10" cy="38" r="2.2" fill="#0ea5e9"/>`,
+    <ellipse cx="21" cy="38.5" rx="8" ry="1.8" fill="#000" opacity="0.5"/>
+    <defs>
+      <linearGradient id="penBody" x1="0" y1="0" x2="1" y2="0">
+        <stop offset="0" stop-color="#454e5e"/><stop offset="0.35" stop-color="#232a36"/>
+        <stop offset="0.75" stop-color="#171c26"/><stop offset="1" stop-color="#2e3542"/>
+      </linearGradient>
+      <linearGradient id="penNib" x1="0" y1="0" x2="1" y2="0">
+        <stop offset="0" stop-color="#f2f6fb"/><stop offset="0.45" stop-color="#aab4c2"/>
+        <stop offset="1" stop-color="#5f6a7a"/>
+      </linearGradient>
+    </defs>
+    <rect x="24.5" y="7" width="7.5" height="21" rx="3.4" fill="url(#penBody)"/>
+    <rect x="24.5" y="10" width="1.8" height="14" rx="0.9" fill="#e11d48" opacity="0.85"/>
+    <path d="M25 27.5 h6.5 l-3.25 8.5 z" fill="url(#penNib)"/>
+    <path d="M28.25 34 l0 2" stroke="#1a2030" stroke-width="0.9"/>
+    <path d="M7 38.5 q7 -1.5 13 -6.5" stroke="#38bdf8" stroke-width="2.2" fill="none" stroke-linecap="round"/>`,
   marker: `
-    <path d="M6 40 q8 -2 14 -8" stroke="#d946ef" stroke-width="6.5" stroke-linecap="round" opacity="0.9" fill="none"/>
-    <g transform="rotate(38 32 18)">
-      <rect x="28" y="2" width="9" height="24" rx="3" fill="#7c3aed" stroke="#3b0764" stroke-width="1.4"/>
-      <path d="M30 26 h5 l-2.5 7 z" fill="#f0abfc"/>
-    </g>`,
+    <ellipse cx="21" cy="38.5" rx="9" ry="1.8" fill="#000" opacity="0.5"/>
+    <defs>
+      <linearGradient id="mkBody" x1="0" y1="0" x2="1" y2="0">
+        <stop offset="0" stop-color="#5b3a86"/><stop offset="0.4" stop-color="#3b2158"/>
+        <stop offset="1" stop-color="#241238"/>
+      </linearGradient>
+      <linearGradient id="mkTip" x1="0" y1="0" x2="1" y2="0">
+        <stop offset="0" stop-color="#cdd4de"/><stop offset="1" stop-color="#767f8d"/>
+      </linearGradient>
+    </defs>
+    <rect x="25" y="5" width="9.5" height="21" rx="3" fill="url(#mkBody)"/>
+    <rect x="25" y="8.5" width="9.5" height="2.4" fill="#d946ef" opacity="0.9"/>
+    <path d="M26.2 26 h7 l1.4 4.2 -4.9 1.6 -4.9 -1.6 z" fill="url(#mkTip)"/>
+    <path d="M28.4 30.4 l2.5 3 2.6 -3.2" fill="#575f6d"/>
+    <path d="M6.5 38 q7 -1 12 -6" stroke="#d946ef" stroke-width="6" fill="none" stroke-linecap="round" opacity="0.9"/>`,
   pencil: `
-    <path d="M7 41 l3 -6 2 2 z" fill="#f59e0b"/>
-    <g transform="rotate(45 30 20)">
-      <rect x="27" y="2" width="7" height="26" rx="1.5" fill="#fbbf24" stroke="#78350f" stroke-width="1.3"/>
-      <rect x="27" y="2" width="7" height="5" rx="1.5" fill="#f472b6"/>
-      <path d="M27 28 h7 l-3.5 8 z" fill="#fde68a" stroke="#78350f" stroke-width="1"/>
-      <path d="M29.2 33.6 l1.3 2.4 1.3 -2.4 z" fill="#111"/>
-    </g>
-    <path d="M6 41 q7 -1 12 -7" stroke="#92400e" stroke-width="1.8" stroke-dasharray="2 2" fill="none" opacity="0.7"/>`,
+    <ellipse cx="21" cy="38.5" rx="8" ry="1.8" fill="#000" opacity="0.5"/>
+    <defs>
+      <linearGradient id="pcWood" x1="0" y1="0" x2="1" y2="0">
+        <stop offset="0" stop-color="#e8b571"/><stop offset="0.45" stop-color="#c98d43"/>
+        <stop offset="1" stop-color="#9c6a2c"/>
+      </linearGradient>
+    </defs>
+    <rect x="24.8" y="10" width="7.6" height="17" fill="url(#pcWood)"/>
+    <path d="M24.8 10 h7.6 v-1.6 q0 -1.4 -1.4 -1.4 h-4.8 q-1.4 0 -1.4 1.4 z" fill="#f472b6"/>
+    <rect x="24.3" y="5.6" width="8.6" height="2" rx="0.8" fill="#aab4c2"/>
+    <path d="M24.8 27 h7.6 l-3.8 7.5 z" fill="#e9d3ac"/>
+    <path d="M27.3 32.1 l1.3 2.4 1.3 -2.4 z" fill="#181818"/>
+    <path d="M24.8 13.2 h7.6 M24.8 20.8 h7.6" stroke="#8a5a20" stroke-width="0.5" opacity="0.6"/>
+    <path d="M6 39 q8 -0.5 13.5 -5.5" stroke="#b07b3a" stroke-width="1.8" fill="none" stroke-linecap="round" stroke-dasharray="2 2"/>`,
   calligraphy: `
-    <path d="M6 38 q6 -10 12 -4 t12 -8" stroke="#0b1220" stroke-width="3.4" fill="none" stroke-linecap="round"/>
-    <path d="M30 4 l8 4 -14 24 -6 -2 z" fill="#111827"/>
-    <path d="M30 4 l8 4 -2 4 -8 -4 z" fill="#4b5563"/>
-    <path d="M22.6 27 l-5.4 9 6.8 -4.6 z" fill="#111827"/>`,
+    <ellipse cx="21" cy="38.5" rx="8" ry="1.8" fill="#000" opacity="0.5"/>
+    <defs>
+      <linearGradient id="cpBody" x1="0" y1="0" x2="1" y2="0">
+        <stop offset="0" stop-color="#3a4150"/><stop offset="0.4" stop-color="#10141c"/>
+        <stop offset="1" stop-color="#252b38"/>
+      </linearGradient>
+      <linearGradient id="cpNib" x1="0" y1="0" x2="1" y2="0">
+        <stop offset="0" stop-color="#ffffff"/><stop offset="0.5" stop-color="#b8c2d0"/>
+        <stop offset="1" stop-color="#68737f"/>
+      </linearGradient>
+    </defs>
+    <rect x="25" y="9" width="7.4" height="15" rx="2.6" fill="url(#cpBody)"/>
+    <rect x="25.6" y="9.8" width="1.4" height="12.5" rx="0.7" fill="#ffffff" opacity="0.18"/>
+    <path d="M25.4 24 h6.6 l-1.2 3.2 h-4.2 z" fill="#39414f"/>
+    <path d="M26.4 27 h4.8 l-2.4 9.5 q-2.4 -7 -2.4 -9.5 z" fill="url(#cpNib)"/>
+    <circle cx="28.8" cy="30.2" r="0.9" fill="#39414f"/>
+    <path d="M28.8 30.2 v5" stroke="#39414f" stroke-width="0.6"/>
+    <path d="M6.5 37.5 q5 -11 11 -5.5 t11 -7.5" stroke="#0b1220" stroke-width="3.2" fill="none" stroke-linecap="round"/>`,
   airbrush: `
-    <circle cx="14" cy="34" r="8" fill="#38bdf8" opacity="0.18"/>
-    <circle cx="14" cy="34" r="5" fill="#38bdf8" opacity="0.3"/>
-    <circle cx="14" cy="34" r="2.6" fill="#38bdf8" opacity="0.55"/>
-    <g transform="rotate(30 34 16)">
-      <rect x="30" y="2" width="9" height="18" rx="4" fill="#64748b" stroke="#1e293b" stroke-width="1.3"/>
-      <path d="M32 20 h5 l-2.5 6 z" fill="#cbd5e1"/>
-    </g>
-    ${[[26, 28], [30, 32], [22, 33]].map(([x, y]) => `<circle cx="${x}" cy="${y}" r="1" fill="#7dd3fc" opacity="0.8"/>`).join("")}`,
+    <ellipse cx="21" cy="38.5" rx="9" ry="1.8" fill="#000" opacity="0.5"/>
+    <defs>
+      <linearGradient id="abBody" x1="0" y1="0" x2="1" y2="0">
+        <stop offset="0" stop-color="#cbd5e1"/><stop offset="0.35" stop-color="#8e9aab"/>
+        <stop offset="0.75" stop-color="#4b5563"/><stop offset="1" stop-color="#6b7686"/>
+      </linearGradient>
+      <radialGradient id="abMist" cx="0.5" cy="0.5" r="0.5">
+        <stop offset="0" stop-color="#7dd3fc" stop-opacity="0.7"/>
+        <stop offset="1" stop-color="#7dd3fc" stop-opacity="0"/>
+      </radialGradient>
+    </defs>
+    <rect x="26" y="8" width="8" height="18" rx="3.6" fill="url(#abBody)"/>
+    <rect x="27.8" y="4.6" width="4.4" height="3.6" rx="1.2" fill="#39414f"/>
+    <rect x="29" y="3" width="2" height="2" rx="0.8" fill="#22d3ee"/>
+    <path d="M27.5 26 h5 l-1.1 3.4 h-2.8 z" fill="#39414f"/>
+    <path d="M28.6 29.4 h2.8 l-1.4 3 z" fill="#aab4c2"/>
+    <ellipse cx="15" cy="33" rx="9" ry="7" fill="url(#abMist)"/>
+    <circle cx="14" cy="33" r="2.2" fill="#38bdf8" opacity="0.65"/>
+    <circle cx="20" cy="29" r="0.9" fill="#7dd3fc" opacity="0.8"/><circle cx="21" cy="35" r="0.8" fill="#7dd3fc" opacity="0.7"/>`,
   spray: `
+    <ellipse cx="21" cy="38.5" rx="9" ry="1.8" fill="#000" opacity="0.5"/>
+    <defs>
+      <linearGradient id="spBody" x1="0" y1="0" x2="1" y2="0">
+        <stop offset="0" stop-color="#84cc16"/><stop offset="0.35" stop-color="#4d7c0f"/>
+        <stop offset="1" stop-color="#365314"/>
+      </linearGradient>
+    </defs>
+    <rect x="26" y="9" width="9" height="20" rx="2.6" fill="url(#spBody)"/>
+    <rect x="26" y="13" width="9" height="4.6" fill="#0f172a" opacity="0.35"/>
+    <rect x="28.4" y="5.2" width="4.2" height="4" rx="1" fill="#d9f99d"/>
+    <rect x="29.4" y="3.2" width="2.2" height="2.2" rx="0.8" fill="#84cc16"/>
     <g fill="#a3e635">
-      ${[[10, 30, 1.6], [14, 26, 1.2], [18, 32, 2], [22, 27, 1.3], [12, 36, 1.4], [19, 37, 1.1], [25, 33, 1.7], [15, 32, 0.9], [8, 34, 1.2]].map(([x, y, r]) => `<circle cx="${x}" cy="${y}" r="${r}" opacity="${0.45 + r * 0.25}"/>`).join("")}
-    </g>
-    <g transform="rotate(-18 34 16)">
-      <rect x="29" y="8" width="10" height="16" rx="2.5" fill="#65a30d" stroke="#1a2e05" stroke-width="1.3"/>
-      <rect x="31.5" y="4" width="5" height="4" rx="1" fill="#d9f99d"/>
-      <circle cx="34" cy="6" r="2.2" fill="#84cc16"/>
+      ${[[9, 30, 1.6], [13, 26, 1.2], [17, 31, 2], [21, 27, 1.3], [11, 35, 1.4], [18, 36, 1.1], [13, 31, 0.9], [7, 33, 1.2], [16, 24, 0.8]].map(([x, y, r]) => `<circle cx="${x}" cy="${y}" r="${r}" opacity="${0.4 + r * 0.25}"/>`).join("")}
     </g>`,
   glow: `
-    <path d="M6 36 q9 -12 18 -2" stroke="#22d3ee" stroke-width="5" fill="none" stroke-linecap="round" opacity="0.25"/>
-    <path d="M6 36 q9 -12 18 -2" stroke="#22d3ee" stroke-width="3" fill="none" stroke-linecap="round" opacity="0.55"/>
-    <path d="M6 36 q9 -12 18 -2" stroke="#a5f3fc" stroke-width="1.4" fill="none" stroke-linecap="round"/>
-    <g transform="rotate(42 34 16)">
-      <rect x="31" y="2" width="7" height="20" rx="3.5" fill="#1e1b4b" stroke="#22d3ee" stroke-width="1.4"/>
-      <circle cx="34.5" cy="24" r="3" fill="#22d3ee">
-        <animate attributeName="opacity" values="1;0.4;1" dur="1.6s" repeatCount="indefinite"/>
-      </circle>
-    </g>`,
+    <ellipse cx="21" cy="38.5" rx="8" ry="1.8" fill="#000" opacity="0.4"/>
+    <defs>
+      <linearGradient id="glBody" x1="0" y1="0" x2="1" y2="0">
+        <stop offset="0" stop-color="#312e81"/><stop offset="0.4" stop-color="#14163a"/>
+        <stop offset="1" stop-color="#1e1b4b"/>
+      </linearGradient>
+      <radialGradient id="glTip" cx="0.5" cy="0.5" r="0.5">
+        <stop offset="0" stop-color="#a5f3fc"/><stop offset="0.45" stop-color="#22d3ee" stop-opacity="0.85"/>
+        <stop offset="1" stop-color="#22d3ee" stop-opacity="0"/>
+      </radialGradient>
+    </defs>
+    <rect x="24.8" y="6" width="7.8" height="22" rx="3.6" fill="url(#glBody)"/>
+    <rect x="27.2" y="8.4" width="3" height="17" rx="1.5" fill="#22d3ee" opacity="0.55"/>
+    <circle cx="28.7" cy="30.5" r="5.6" fill="url(#glTip)"/>
+    <circle cx="28.7" cy="30.5" r="2" fill="#ecfeff">
+      <animate attributeName="opacity" values="1;0.45;1" dur="1.6s" repeatCount="indefinite"/>
+    </circle>
+    <path d="M6 37 q8 -12 16 -3" stroke="#22d3ee" stroke-width="4.6" fill="none" stroke-linecap="round" opacity="0.25"/>
+    <path d="M6 37 q8 -12 16 -3" stroke="#22d3ee" stroke-width="2.6" fill="none" stroke-linecap="round" opacity="0.55"/>
+    <path d="M6 37 q8 -12 16 -3" stroke="#cffafe" stroke-width="1.2" fill="none" stroke-linecap="round"/>`,
 };
 for (const [id, body] of Object.entries(BRUSHES)) {
   save(`brush-${id}.svg`, svg(44, 44, `
